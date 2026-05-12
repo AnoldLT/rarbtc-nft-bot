@@ -193,7 +193,7 @@ class RarbtcBot:
             pass
 
         # Check amount available before reserving
-        self.ensure_ready_to_reserve()
+        self.ensure_no_nfts_before_reserve()
 
         # Ensure NFTs cleared before reserving
         self.ensure_nfts_cleared_before_reserve()
