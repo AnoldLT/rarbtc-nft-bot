@@ -266,14 +266,31 @@ def main() -> None:
             log.info("✅ All %d cycles completed successfully.", MAX_CYCLES)
 
         except Exception as exc:
-            log.error("❌ Fatal error — aborting run: %s", exc, exc_info=True)
-            # Save a screenshot for debugging (credentials never appear in screenshot)
-            screenshot_path = logs_dir / f"error_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.png"
+            log.error("FATAL ERROR - aborting run: %s", exc, exc_info=True)
+            ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+
+            # Log current URL at time of crash
             try:
-                page.screenshot(path=str(screenshot_path))
-                log.info("Screenshot saved: %s", screenshot_path)
+                log.info("URL at crash: %s", page.url)
             except Exception:
                 pass
+
+            # Save full-page screenshot for visual debugging
+            screenshot_path = logs_dir / f"error_{ts}.png"
+            try:
+                page.screenshot(path=str(screenshot_path), full_page=True)
+                log.info("Screenshot saved: %s", screenshot_path)
+            except Exception as se:
+                log.warning("Could not save screenshot: %s", se)
+
+            # Save page HTML so you can inspect real CSS selectors on the live site
+            html_path = logs_dir / f"error_page_{ts}.html"
+            try:
+                html_path.write_text(page.content(), encoding="utf-8")
+                log.info("Page HTML saved: %s - open this to find correct selectors", html_path)
+            except Exception as he:
+                log.warning("Could not save page HTML: %s", he)
+
             sys.exit(1)
 
         finally:

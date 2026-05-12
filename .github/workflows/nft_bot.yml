@@ -11,6 +11,9 @@ on:
     - cron: "0 8 * * *"   # Every day at 08:00 UTC
   workflow_dispatch:        # Also allows manual trigger from GitHub UI
 
+env:
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # Opt into Node.js 24 now
+
 jobs:
   run-bot:
     name: Run rarbtc NFT Bot
@@ -20,11 +23,11 @@ jobs:
     steps:
       # 1. Check out the repository
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v4.2.2
 
       # 2. Set up Python
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v5.6.0
         with:
           python-version: "3.11"
           cache: "pip"
@@ -39,7 +42,11 @@ jobs:
           playwright install chromium
           playwright install-deps chromium
 
-      # 5. Run the bot — credentials injected from GitHub Secrets
+      # 5. Ensure logs directory exists before bot runs
+      - name: Create logs directory
+        run: mkdir -p logs
+
+      # 6. Run the bot — credentials injected from GitHub Secrets
       - name: Run NFT bot
         env:
           RARBTC_USERNAME:             ${{ secrets.RARBTC_USERNAME }}
@@ -47,19 +54,20 @@ jobs:
           RARBTC_RESERVATION_PASSWORD: ${{ secrets.RARBTC_RESERVATION_PASSWORD }}
         run: python bot.py
 
-      # 6. Upload logs as a downloadable artifact (kept 30 days)
+      # 7. Upload logs as a downloadable artifact (kept 30 days)
       - name: Upload run logs
         if: always()   # Upload even if the bot failed
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: bot-logs-${{ github.run_id }}
           path: logs/
           retention-days: 30
+          if-no-files-found: warn   # Don't fail if logs dir is empty
 
-      # 7. Upload error screenshot if one was saved
+      # 8. Upload error screenshot if one was saved
       - name: Upload error screenshot (if any)
         if: failure()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v4.6.2
         with:
           name: error-screenshot-${{ github.run_id }}
           path: logs/*.png
