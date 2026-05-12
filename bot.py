@@ -193,9 +193,12 @@ class RarbtcBot:
             pass
 
         # Check amount available before reserving
-        self.ensure_enough_balance()
+        self.ensure_ready_to_reserve()
 
-        # Re-navigate to reservation page in case ensure_enough_balance redirected
+        # Ensure NFTs cleared before reserving
+        self.ensure_nfts_cleared_before_reserve()
+
+        # Re-navigate to reservation page
         log.info("Navigating to reservation page before clicking ...")
         self.page.goto(RESERVATION_URL, wait_until="domcontentloaded")
         time.sleep(10)
@@ -315,9 +318,9 @@ class RarbtcBot:
             log.info("I understand button already gone — sale confirmed.")
         time.sleep(10)
 
-        log.info("Waiting 10 minutes before next cycle ...")
-        time.sleep(600)
-        log.info("10 minute wait complete.")
+        log.info("Waiting 5 minutes before next cycle ...")
+        time.sleep(300)
+        log.info("5 minute wait complete.")
 
     # ── Sell from My NFTs page ────────────────────────────────────────────────
 
@@ -420,89 +423,83 @@ class RarbtcBot:
         except Exception:
             pass
 
-        # Read reservation count — div.val contains "X Times"
+        # Find li elements containing "Number of reservations available today"
         try:
-            page_text = self.page.inner_text("body")
-            import re as _re
-            match = _re.search(r"(\d+)\s*Times\s*\n.*?Number of reservations available", page_text, _re.DOTALL)
-            if match:
-                count = int(match.group(1))
-                log.info("Reservations available today: %d", count)
-                return count
-            # Fallback: find all div.val elements
-            val_els = self.page.query_selector_all("div.val")
-            for el in val_els:
-                txt = el.inner_text().strip()
-                if "Times" in txt:
-                    count = int(txt.replace("Times", "").strip())
-                    log.info("Reservations available today: %d", count)
-                    return count
+            li_els = self.page.query_selector_all("li")
+            for li in li_els:
+                try:
+                    li_text = li.inner_text()
+                    if "Number of reservations available" in li_text:
+                        val_el = li.query_selector("div.val")
+                        if val_el:
+                            txt = val_el.inner_text().strip().replace("Times", "").strip()
+                            count = int(txt)
+                            log.info("Reservations available today: %d", count)
+                            return count
+                except Exception:
+                    continue
         except Exception as e:
-            log.warning("Could not read reservation count: %s", e)
+            log.warning("Could not read reservation count via DOM: %s", e)
 
         log.warning("Could not determine reservation count — assuming 0.")
         return 0
 
-    def get_amount_available(self) -> float:
-        """Read the Amount available for reservation from the reservation page."""
+    def get_nft_total_count(self) -> int:
+        """Read NFT total number from My NFT page using DOM check."""
         try:
-            page_text = self.page.inner_text("body")
-            import re as _re
-            # Looks for pattern like "250 USDT\nAmount available for reservation"
-            match = _re.search(r"([\d.]+)\s*USDT[\s\S]*?Amount available for reservation", page_text)
-            if match:
-                amount = float(match.group(1))
-                log.info("Amount available for reservation: %.2f USDT", amount)
-                return amount
-            # Fallback: find all div.val elements
-            val_els = self.page.query_selector_all("div.val")
-            for el in val_els:
-                txt = el.inner_text().strip()
-                if "USDT" in txt and "." in txt:
-                    try:
-                        amount = float(txt.replace("USDT", "").strip())
-                        log.info("Amount available for reservation: %.2f USDT", amount)
-                        return amount
-                    except ValueError:
-                        continue
-        except Exception as e:
-            log.warning("Could not read amount available: %s", e)
-        log.warning("Could not determine amount available — assuming 0.")
-        return 0.0
+            if "nft/my" not in self.page.url:
+                self.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
+                time.sleep(10)
+                try:
+                    close_btn = self.page.query_selector("div.notice-btn div:last-child")
+                    if close_btn and close_btn.is_visible():
+                        close_btn.click()
+                        time.sleep(5)
+                except Exception:
+                    pass
 
-    def ensure_enough_balance(self) -> None:
-        """
-        Before reserving, check amount available is >= 250 USDT.
-        If not, sell any existing NFTs and wait 10 min for funds to reflect.
-        Then proceed regardless (even if still below 250).
-        """
-        amount = self.get_amount_available()
-        if amount >= 250:
-            log.info("Amount available %.2f USDT >= 250 — proceeding with reservation.", amount)
+            # Fallback: count sell buttons
+            sell_btns = self.page.query_selector_all(
+                "button[data-v-5055aed9], button:has-text('Sell NFT')"
+            )
+            count = len(sell_btns)
+            log.info("NFT total (by sell buttons): %d", count)
+            return count
+
+        except Exception as e:
+            log.warning("Could not read NFT total count: %s", e)
+        return 0
+
+    def ensure_nfts_cleared_before_reserve(self) -> None:
+        """Before reserving, ensure NFT total is 0. Sell if needed, wait 5 min, re-check."""
+        self.ensure_logged_in()
+        nfts = self.get_nft_total_count()
+
+        if nfts == 0:
+            log.info("NFT total: 0 piece(s) — ready to reserve.")
             return
 
-        log.warning("Amount available %.2f USDT < 250 — checking My NFT page for unsold NFTs ...", amount)
-        self.ensure_logged_in()
-        nfts = self.get_nfts_available()
-
-        if nfts > 0:
-            log.info("%d NFT(s) found — selling to free up balance ...", nfts)
-            retry(self.sell_from_my_nfts, label="BalanceCheck:SellNFTs")
-        else:
-            log.info("No NFTs to sell — will wait 10 min and proceed anyway.")
-
-        log.info("Waiting 10 minutes for funds to reflect ...")
-        time.sleep(600)
-
-        # Re-check amount after wait
-        self.ensure_logged_in()
-        self.page.goto(RESERVATION_URL, wait_until="domcontentloaded")
+        log.info("%d NFT(s) found — selling before reservation ...", nfts)
+        retry(self.sell_from_my_nfts, label="PreReserve:SellNFTs")
         time.sleep(10)
-        amount = self.get_amount_available()
-        if amount >= 250:
-            log.info("Amount now %.2f USDT >= 250 — proceeding.", amount)
+
+        log.info("Waiting 5 minutes for sale to reflect ...")
+        time.sleep(300)
+
+        self.ensure_logged_in()
+        nfts = self.get_nft_total_count()
+        if nfts == 0:
+            log.info("NFT total now 0 — proceeding to reserve.")
+            return
+
+        log.info("%d NFT(s) still present — waiting another 5 minutes ...", nfts)
+        time.sleep(300)
+        self.ensure_logged_in()
+        nfts = self.get_nft_total_count()
+        if nfts == 0:
+            log.info("NFT total now 0 — proceeding to reserve.")
         else:
-            log.warning("Amount still %.2f USDT < 250 after wait — proceeding anyway.", amount)
+            log.warning("%d NFT(s) still present after wait — proceeding anyway.", nfts)
 
     def get_nfts_available(self) -> int:
         """Navigate to My NFT page and return total NFT count."""
@@ -558,7 +555,7 @@ class RarbtcBot:
                     time.sleep(5)
 
     def run_cycle(self, cycle_num: int) -> None:
-        log.info("═══ Starting cycle %d/%d ═══", cycle_num, MAX_CYCLES)
+        log.info("=== Starting cycle %d/%d ===", cycle_num, MAX_CYCLES)
 
         self.ensure_logged_in()
 
@@ -605,7 +602,7 @@ class RarbtcBot:
             self.ensure_logged_in()
             retry(self.sell_from_popup, label=f"Cycle{cycle_num}:SellPopup")
 
-        log.info("═══ Cycle %d complete. ═══", cycle_num)
+        log.info("=== Cycle %d complete. ===", cycle_num)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
