@@ -268,15 +268,18 @@ class RarbtcBot:
         time.sleep(10)
 
         # Success popup: "Selling application submitted successfully"
-        # Click "I understand" — confirmed: button.van-button--primary
         log.info("Waiting for sale confirmation ...")
         self.page.wait_for_selector(
             "text='Selling application submitted successfully'",
             timeout=20_000
         )
         log.info("Sale submitted successfully.")
-        self.page.click("button.van-button--primary", timeout=10_000)
-        log.info("Clicked I understand.")
+        # Popup may auto-close — don't fail if button already gone
+        try:
+            self.page.click("button.van-button--primary", timeout=5_000)
+            log.info("Clicked I understand.")
+        except Exception:
+            log.info("I understand button already gone — sale confirmed.")
         time.sleep(10)
 
         log.info("Waiting 10 minutes before next cycle ...")
@@ -337,14 +340,17 @@ class RarbtcBot:
                 time.sleep(10)
 
                 # Success popup: "Selling application submitted successfully"
-                # Click "I understand" — same button class: button.van-button--primary
                 self.page.wait_for_selector(
                     "text='Selling application submitted successfully'",
                     timeout=20_000
                 )
                 log.info("Sale submitted successfully for NFT %d.", i)
-                self.page.click("button.van-button--primary", timeout=10_000)
-                log.info("Clicked I understand.")
+                # Click "I understand" — popup may auto-close, so don't fail if button gone
+                try:
+                    self.page.click("button.van-button--primary", timeout=5_000)
+                    log.info("Clicked I understand.")
+                except Exception:
+                    log.info("I understand button already gone — sale confirmed.")
                 time.sleep(10)
 
             except Exception as e:
