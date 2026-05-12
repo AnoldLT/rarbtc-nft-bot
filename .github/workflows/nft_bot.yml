@@ -8,7 +8,7 @@ name: NFT Bot Daily Run
 
 on:
   schedule:
-    - cron: "0 8 * * *"   # Every day at 08:00 UTC
+    - cron: "0 5 * * *"   # Every day at 05:00 UTC (07:00 SAST / UTC+2)
   workflow_dispatch:        # Also allows manual trigger from GitHub UI
 
 env:

@@ -219,48 +219,39 @@ class RarbtcBot:
         time.sleep(10)
 
         log.info("Waiting up to 3 min for order confirmation ...")
-        self.page.wait_for_selector(
-            "text='Sell', text='SELL', button:has-text('Sell'), [class*='sell']",
-            timeout=POPUP_TIMEOUT_MS,
-        )
+        # Try broad selectors — we'll refine once we see the confirmation popup HTML
+        try:
+            self.page.wait_for_selector(
+                "text='Sell', text='SELL', button:has-text('Sell'), "
+                "[class*='sell'], text='NFT On Sale', text='Completed', "
+                "text='Success', [class*='success'], [class*='complete']",
+                timeout=POPUP_TIMEOUT_MS,
+            )
+            log.info("Order confirmation appeared.")
+        except Exception:
+            # Save page HTML so we can see what actually appeared after 3 min
+            log.warning("Confirmation popup not detected — saving page state for selector inspection ...")
+            ts = __import__("datetime").datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            try:
+                html_path = Path("logs") / f"after_reserve_{ts}.html"
+                html_path.write_text(self.page.content(), encoding="utf-8")
+                self.page.screenshot(path=str(Path("logs") / f"after_reserve_{ts}.png"), full_page=True)
+                log.info("Saved post-reserve page: %s", html_path)
+            except Exception as se:
+                log.warning("Could not save page state: %s", se)
+            raise
         time.sleep(10)
-        log.info("Order confirmation appeared.")
 
     # ── Sell after reservation ────────────────────────────────────────────────
 
     def sell_from_popup(self) -> None:
-        log.info("Clicking Sell button in confirmation popup ...")
-        self.page.click(
-            "text='Sell', text='SELL', button:has-text('Sell'), "
-            "button:has-text('SELL'), [class*='sell']",
-            timeout=15_000,
-        )
-        time.sleep(10)
-
-        log.info("Accepting the offered sale value ...")
-        try:
-            self.page.click(
-                "button:has-text('Agree'), button:has-text('Accept'), button:has-text('Confirm'), "
-                "button:has-text('OK'), button:has-text('Yes'), [class*='agree'], [class*='confirm']",
-                timeout=10_000,
-            )
-            log.info("Agreed to sale value.")
-        except Exception:
-            log.warning("No explicit agree button found — sale may have self-confirmed.")
-        time.sleep(10)
-
-        log.info("Waiting %ds for sale to process ...", SELL_WAIT_S)
-        time.sleep(SELL_WAIT_S)
-        log.info("Sale from popup complete.")
-
-    # ── Sell from My NFTs page ────────────────────────────────────────────────
-
-    def sell_from_my_nfts(self) -> None:
-        log.info("Navigating to My NFTs page ...")
+        # After reservation confirmation, navigate to My NFT page to sell
+        # The flow goes: reservation done → /nft/my → sell from there
+        log.info("Navigating to My NFT page to sell reserved NFT ...")
         self.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
         time.sleep(10)
 
-        # Close any popup on this page too
+        # Close popup if present
         try:
             close_btn = self.page.query_selector("div.notice-btn div:last-child")
             if close_btn and close_btn.is_visible():
@@ -270,41 +261,140 @@ class RarbtcBot:
         except Exception:
             pass
 
-        sell_buttons = self.page.query_selector_all(
-            "button:has-text('Sell'), a:has-text('Sell'), [class*='sell-btn'], [class*='sell_btn']"
-        )
+        # Find Sell NFT button — confirmed: button[data-v-5055aed9]
+        sell_btn = self.page.query_selector("button[data-v-5055aed9]")
+        if not sell_btn:
+            sell_btn = self.page.query_selector("button:has-text('Sell NFT')")
 
-        if not sell_buttons:
-            log.info("No NFTs found on My NFTs page — nothing to sell.")
+        if not sell_btn:
+            log.warning("No Sell NFT button found on My NFT page after reservation.")
             return
 
-        log.info("Found %d NFT(s) listed. Selling each ...", len(sell_buttons))
-        for i, btn in enumerate(sell_buttons, 1):
-            log.info("Selling NFT %d/%d ...", i, len(sell_buttons))
-            btn.click()
-            time.sleep(10)
-            try:
-                self.page.click(
-                    "button:has-text('Agree'), button:has-text('Accept'), button:has-text('Confirm'), "
-                    "button:has-text('OK'), button:has-text('Yes'), [class*='agree'], [class*='confirm']",
-                    timeout=10_000,
-                )
-                log.info("Agreed to sale value for NFT %d.", i)
-            except Exception:
-                log.warning("No agree button for NFT %d — may have self-confirmed.", i)
-            time.sleep(10)
+        sell_btn.click()
+        log.info("Clicked Sell NFT button.")
+        time.sleep(10)
 
-        log.info("Waiting %ds for sale(s) to process ...", SELL_WAIT_S)
-        time.sleep(SELL_WAIT_S)
+        # NFT Sale popup — click Sell NFT inside it
+        # Confirmed: button.van-button--primary > div > span.van-button__text "Sell NFT"
+        self.page.click("button.van-button--primary", timeout=15_000)
+        log.info("Clicked Sell NFT in sale popup.")
+        time.sleep(10)
+
+        # Success popup — "Selling application submitted successfully"
+        # Click "I understand" button
+        self.page.wait_for_selector(
+            "text='Selling application submitted successfully'",
+            timeout=20_000
+        )
+        log.info("Sale submitted successfully.")
+        self.page.click("button.van-button--primary", timeout=10_000)
+        log.info("Clicked I understand.")
+        time.sleep(10)
+
+        log.info("Waiting 10 min before next cycle ...")
+        time.sleep(600)  # 10 minutes as requested
+        log.info("Wait complete — proceeding to next cycle.")
+
+    # ── Sell from My NFTs page ────────────────────────────────────────────────
+
+    def sell_from_my_nfts(self) -> None:
+        log.info("Navigating to My NFTs page ...")
+        self.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
+        time.sleep(10)
+
+        # Close promotional popup if present
+        try:
+            close_btn = self.page.query_selector("div.notice-btn div:last-child")
+            if close_btn and close_btn.is_visible():
+                close_btn.click()
+                log.info("Closed popup on My NFTs page.")
+                time.sleep(10)
+        except Exception:
+            pass
+
+        # Check NFT total number — look for "NFT total number" stat
+        # If 0 NFTs, nothing to sell
+        try:
+            page_text = self.page.inner_text("body")
+            if "0 piece" in page_text and "NFT total number" in page_text:
+                # Confirm it's the total number that's 0
+                total_el = self.page.query_selector("div.van-list")
+                if not total_el or not total_el.query_selector("li"):
+                    log.info("No NFTs available on My NFTs page — nothing to sell.")
+                    return
+        except Exception:
+            pass
+
+        # Find all Sell NFT buttons — confirmed selector: button[data-v-5055aed9]
+        sell_buttons = self.page.query_selector_all("button[data-v-5055aed9]")
+        if not sell_buttons:
+            # Fallback
+            sell_buttons = self.page.query_selector_all("button:has-text('Sell NFT')")
+
+        if not sell_buttons:
+            log.info("No Sell NFT buttons found — nothing to sell.")
+            return
+
+        log.info("Found %d NFT(s) to sell.", len(sell_buttons))
+        for i, btn in enumerate(sell_buttons, 1):
+            log.info("Processing NFT %d/%d ...", i, len(sell_buttons))
+            try:
+                btn.click()
+                time.sleep(10)
+
+                # NFT Sale popup appears — click "Sell NFT" button inside it
+                # Confirmed: span.van-button__text "Sell NFT" inside button.van-button--primary
+                self.page.click("button.van-button--primary", timeout=15_000)
+                log.info("Clicked Sell NFT in sale popup.")
+                time.sleep(10)
+
+                # Success popup: "Selling application submitted successfully"
+                # Click "I understand" — same button class: button.van-button--primary
+                self.page.wait_for_selector(
+                    "text='Selling application submitted successfully'",
+                    timeout=20_000
+                )
+                log.info("Sale submitted successfully for NFT %d.", i)
+                self.page.click("button.van-button--primary", timeout=10_000)
+                log.info("Clicked I understand.")
+                time.sleep(10)
+
+            except Exception as e:
+                log.warning("Error selling NFT %d: %s", i, e)
+                continue
+
         log.info("My NFTs sell step complete.")
 
     # ── Full single cycle ─────────────────────────────────────────────────────
 
+    def ensure_logged_in(self) -> None:
+        """Re-login if session has expired, then close popup."""
+        if "/login" in self.page.url:
+            log.warning("Session expired — re-logging in ...")
+            retry(self.login, label="ReLogin")
+            # After re-login the promotional popup always appears — close it
+            time.sleep(5)
+            for attempt in range(3):
+                try:
+                    close_btn = self.page.query_selector("div.notice-btn div:last-child")
+                    if close_btn and close_btn.is_visible():
+                        close_btn.click()
+                        log.info("Closed popup after re-login.")
+                        time.sleep(10)
+                        break
+                    time.sleep(5)
+                except Exception:
+                    time.sleep(5)
+
     def run_cycle(self, cycle_num: int) -> None:
         log.info("═══ Starting cycle %d/%d ═══", cycle_num, MAX_CYCLES)
 
-        retry(self.reserve_nft,      label=f"Cycle{cycle_num}:Reserve")
-        retry(self.sell_from_popup,  label=f"Cycle{cycle_num}:SellPopup")
+        self.ensure_logged_in()
+        retry(self.reserve_nft,       label=f"Cycle{cycle_num}:Reserve")
+        self.ensure_logged_in()
+        retry(self.sell_from_popup,   label=f"Cycle{cycle_num}:SellPopup")
+        # Check for any remaining NFTs after the sell
+        self.ensure_logged_in()
         retry(self.sell_from_my_nfts, label=f"Cycle{cycle_num}:SellMyNFTs")
 
         log.info("═══ Cycle %d complete. ═══", cycle_num)
