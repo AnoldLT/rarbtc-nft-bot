@@ -128,114 +128,157 @@ class RarbtcBot:
         log.info("Clicking Login button ...")
         self.page.click("div.bt.flex-center", timeout=10_000)
 
-        # Wait for navigation away from login page
-        time.sleep(5)
+        # Wait for navigation — site may take time to redirect after login
+        time.sleep(8)
         log.info("Post-login URL: %s", self.page.url)
 
-        if "/login" in self.page.url:
-            raise RuntimeError("Login failed — still on login page. Verify credentials in GitHub Secrets.")
+        # Check for logged-in indicators rather than just URL
+        # The site shows "Asset management" and user avatar when logged in
+        logged_in = False
+
+        # Check 1: URL changed away from login
+        if "/login" not in self.page.url:
+            logged_in = True
+            log.info("Login confirmed via URL change.")
+
+        # Check 2: Look for logged-in UI elements even if URL still shows /login
+        if not logged_in:
+            try:
+                self.page.wait_for_selector(
+                    "text='Asset management', [class*='user-info'], [class*='avatar'], "
+                    "[class*='logIn'], text='Ar'",
+                    timeout=8_000
+                )
+                logged_in = True
+                log.info("Login confirmed via page element.")
+            except Exception:
+                pass
+
+        if not logged_in:
+            raise RuntimeError("Login failed — credentials rejected. Verify GitHub Secrets.")
 
         log.info("Login successful.")
 
         # Step 6: Close post-login promotional popup if present
-        # The popup has a notice-btn div containing Previous and Close divs
-        time.sleep(2)
+        # Structure: div.notice-btn > div[Previous], div[Close]
+        time.sleep(10)
         try:
-            # Get all divs inside notice-btn — Close is the second one
-            close_btn = self.page.query_selector("div.notice-btn div:nth-child(2)")
+            close_btn = self.page.query_selector("div.notice-btn div:last-child")
             if close_btn and close_btn.is_visible():
                 close_btn.click()
                 log.info("Closed post-login promotional popup.")
-                time.sleep(1)
+                time.sleep(10)
             else:
-                # Fallback: find any visible div with exact text "Close"
-                for el in self.page.query_selector_all("div"):
-                    try:
-                        if el.inner_text().strip() == "Close" and el.is_visible():
-                            el.click()
-                            log.info("Closed popup via text fallback.")
-                            time.sleep(1)
-                            break
-                    except Exception:
-                        continue
+                log.info("No post-login popup detected — continuing.")
         except Exception as e:
-            log.warning("Could not close post-login popup (may not have appeared): %s", e)
+            log.warning("Could not close post-login popup: %s", e)
 
     # ── Reserve NFT ───────────────────────────────────────────────────────────
 
     def reserve_nft(self) -> None:
-        log.info("Navigating to reservation page …")
-        self.page.goto(RESERVATION_URL, wait_until="networkidle")
+        log.info("Navigating to reservation page ...")
+        self.page.goto(RESERVATION_URL, wait_until="domcontentloaded")
+        time.sleep(10)
 
-        log.info("Clicking Reserve button …")
+        # Close any promotional popup that may appear on this page too
+        try:
+            close_btn = self.page.query_selector("div.notice-btn div:last-child")
+            if close_btn and close_btn.is_visible():
+                close_btn.click()
+                log.info("Closed popup on reservation page.")
+                time.sleep(10)
+        except Exception:
+            pass
+
+        log.info("Clicking Reservation button ...")
+        # From screenshot: the button has text "Reservation" inside a blue button
         self.page.click(
-            "button:has-text('Reserve'), a:has-text('Reserve'), [class*='reserve']",
+            "button:has-text('Reservation'), .reservation-btn, "
+            "[class*='reservation'] button, button.el-button--primary",
             timeout=20_000,
         )
+        time.sleep(10)
 
-        log.info("Waiting for reservation password popup …")
+        log.info("Waiting for reservation password popup ...")
         self.page.wait_for_selector(
-            "input[type='password'], input[placeholder*='password'], input[placeholder*='Password']",
+            "input[type='password'], input[placeholder*='assword'], input[placeholder*='password']",
             timeout=20_000,
         )
+        time.sleep(10)
 
-        log.info("Entering reservation password …")
+        log.info("Entering reservation password ...")
         self.page.fill(
-            "input[type='password'], input[placeholder*='password'], input[placeholder*='Password']",
+            "input[type='password'], input[placeholder*='assword']",
             RESERVATION_PASSWORD,
         )
-        # Submit the popup form
-        self.page.keyboard.press("Enter")
-        # Alternative: click a confirm/OK button inside the popup
+        time.sleep(10)
+
+        # Submit the popup
         try:
             self.page.click(
                 "button:has-text('Confirm'), button:has-text('OK'), button:has-text('Submit'), "
-                "button:has-text('Reserve'), [class*='confirm']",
-                timeout=5_000,
+                "button:has-text('Reservation'), button.el-button--primary",
+                timeout=10_000,
             )
+            log.info("Clicked confirm button on password popup.")
         except Exception:
-            pass  # Enter key above was sufficient
+            self.page.keyboard.press("Enter")
+            log.info("Pressed Enter to submit reservation password.")
+        time.sleep(10)
 
-        log.info("Waiting up to 3 min for order confirmation popup …")
-        # Wait for the confirmation popup containing 'SELL NFT' or similar text
+        log.info("Waiting up to 3 min for order confirmation popup ...")
         self.page.wait_for_selector(
-            "text='SELL NFT', text='Sell NFT', button:has-text('Sell'), [class*='sell']",
+            "text='Sell', text='SELL', button:has-text('Sell'), "
+            "[class*='sell'], text='NFT On Sale'",
             timeout=POPUP_TIMEOUT_MS,
         )
+        time.sleep(10)
         log.info("Order confirmation popup appeared.")
 
     # ── Sell after reservation ────────────────────────────────────────────────
 
     def sell_from_popup(self) -> None:
-        log.info("Clicking Sell NFT in confirmation popup …")
+        log.info("Clicking Sell button in confirmation popup ...")
         self.page.click(
-            "text='SELL NFT', text='Sell NFT', button:has-text('Sell NFT'), "
-            "button:has-text('SELL NFT'), [class*='sell-nft']",
+            "text='Sell', text='SELL', button:has-text('Sell'), "
+            "button:has-text('SELL'), [class*='sell']",
             timeout=15_000,
         )
+        time.sleep(10)
 
-        log.info("Accepting the offered sale value …")
-        # Agree / confirm the sale value dialog
+        log.info("Accepting the offered sale value ...")
         try:
             self.page.click(
                 "button:has-text('Agree'), button:has-text('Accept'), button:has-text('Confirm'), "
                 "button:has-text('OK'), button:has-text('Yes'), [class*='agree'], [class*='confirm']",
                 timeout=10_000,
             )
+            log.info("Agreed to sale value.")
         except Exception:
             log.warning("No explicit agree button found — sale may have self-confirmed.")
+        time.sleep(10)
 
-        log.info("Waiting %ds for sale to process …", SELL_WAIT_S)
+        log.info("Waiting %ds for sale to process ...", SELL_WAIT_S)
         time.sleep(SELL_WAIT_S)
         log.info("Sale from popup complete.")
 
     # ── Sell from My NFTs page ────────────────────────────────────────────────
 
     def sell_from_my_nfts(self) -> None:
-        log.info("Navigating to My NFTs page …")
-        self.page.goto(MY_NFTS_URL, wait_until="networkidle")
+        log.info("Navigating to My NFTs page ...")
+        self.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
+        time.sleep(10)
 
-        # Check whether any NFTs are listed
+        # Close any popup on this page too
+        try:
+            close_btn = self.page.query_selector("div.notice-btn div:last-child")
+            if close_btn and close_btn.is_visible():
+                close_btn.click()
+                log.info("Closed popup on My NFTs page.")
+                time.sleep(10)
+        except Exception:
+            pass
+
         sell_buttons = self.page.query_selector_all(
             "button:has-text('Sell'), a:has-text('Sell'), [class*='sell-btn'], [class*='sell_btn']"
         )
@@ -244,23 +287,23 @@ class RarbtcBot:
             log.info("No NFTs found on My NFTs page — nothing to sell.")
             return
 
-        log.info("Found %d NFT(s) listed. Selling each …", len(sell_buttons))
+        log.info("Found %d NFT(s) listed. Selling each ...", len(sell_buttons))
         for i, btn in enumerate(sell_buttons, 1):
-            log.info("Selling NFT %d/%d …", i, len(sell_buttons))
+            log.info("Selling NFT %d/%d ...", i, len(sell_buttons))
             btn.click()
-            time.sleep(2)
-            # Agree to the offered sale value
+            time.sleep(10)
             try:
                 self.page.click(
                     "button:has-text('Agree'), button:has-text('Accept'), button:has-text('Confirm'), "
                     "button:has-text('OK'), button:has-text('Yes'), [class*='agree'], [class*='confirm']",
                     timeout=10_000,
                 )
+                log.info("Agreed to sale value for NFT %d.", i)
             except Exception:
                 log.warning("No agree button for NFT %d — may have self-confirmed.", i)
-            time.sleep(5)  # brief pause between sells
+            time.sleep(10)
 
-        log.info("Waiting %ds for sale(s) to process …", SELL_WAIT_S)
+        log.info("Waiting %ds for sale(s) to process ...", SELL_WAIT_S)
         time.sleep(SELL_WAIT_S)
         log.info("My NFTs sell step complete.")
 
