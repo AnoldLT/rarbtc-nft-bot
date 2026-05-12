@@ -259,3 +259,72 @@ Wait for text='Selling application submitted successfully'
 Click button.van-button--primary (I understand) — graceful if auto-closed
 Wait 5 minutes
 ```
+
+---
+
+## Multi-Account Support
+
+The bot supports running **N accounts sequentially** in a single daily run. The number of accounts is controlled by a GitHub Actions Variable (not a Secret).
+
+### How it works
+
+- `ACCOUNT_COUNT` variable tells the bot how many accounts to loop through
+- Bot runs Account 1 fully → Account 2 fully → ... → Account N fully
+- Each account gets its **own separate log file** (`account_1_bot_TIMESTAMP.log`, etc.)
+- If an account's secrets are missing → that account is **skipped** with a reason logged to `account_N_SKIPPED_TIMESTAMP.log`
+- If an account **fails** mid-run → error is logged with screenshot + HTML dump → bot continues to next account
+
+### Setup
+
+**Step 1 — Set ACCOUNT_COUNT variable**
+
+Go to your repo → **Settings → Variables → Actions → New repository variable**:
+
+| Variable name | Value |
+|---|---|
+| `ACCOUNT_COUNT` | Number of accounts (e.g. `2`, `5`) |
+
+**Step 2 — Add secrets for each account**
+
+Go to **Settings → Secrets and variables → Actions → New repository secret**:
+
+For each account number `N` (1 through ACCOUNT_COUNT):
+
+| Secret name | Value |
+|---|---|
+| `RARBTC_USERNAME_N` | Account N login email |
+| `RARBTC_PASSWORD_N` | Account N login password |
+| `RARBTC_RESERVATION_PASSWORD_N` | Account N fund/PIN password |
+
+Example for 3 accounts — 9 secrets total:
+```
+RARBTC_USERNAME_1, RARBTC_PASSWORD_1, RARBTC_RESERVATION_PASSWORD_1
+RARBTC_USERNAME_2, RARBTC_PASSWORD_2, RARBTC_RESERVATION_PASSWORD_2
+RARBTC_USERNAME_3, RARBTC_PASSWORD_3, RARBTC_RESERVATION_PASSWORD_3
+```
+
+The workflow pre-loads secrets for up to **5 accounts**. To add more, edit `nft_bot.yml` and add the additional secret references.
+
+### Timing estimate
+
+| Accounts | Estimated daily run time |
+|---|---|
+| 1 | ~20 min |
+| 2 | ~40 min |
+| 3 | ~60 min |
+| 5 | ~100 min |
+
+GitHub Actions free tier allows 2,000 min/month — 5 accounts × 30 days = ~3,000 min. Consider upgrading to a paid plan or self-hosted runner for 5+ accounts.
+
+### Log files per run
+
+Each account produces its own log file in the `logs/` artifact:
+
+```
+logs/
+├── account_1_bot_20260513_050012.log     # Account 1 full log
+├── account_2_bot_20260513_051523.log     # Account 2 full log
+├── account_3_SKIPPED_20260513_053045.log # Account 3 skipped (missing secrets)
+├── account_1_error_20260513_050512.png   # Account 1 error screenshot (if failed)
+└── account_1_error_page_20260513_050512.html
+```

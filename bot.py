@@ -16,9 +16,9 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 # ── Load environment variables ────────────────────────────────────────────────
 load_dotenv()
 
-USERNAME             = os.environ.get("RARBTC_USERNAME", "")
-PASSWORD             = os.environ.get("RARBTC_PASSWORD", "")
-RESERVATION_PASSWORD = os.environ.get("RARBTC_RESERVATION_PASSWORD", "")
+# Multi-account support — credentials loaded per account at runtime
+# ACCOUNT_COUNT is a GitHub Actions variable (not secret)
+ACCOUNT_COUNT = int(os.environ.get("ACCOUNT_COUNT", "1"))
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 BASE_URL         = "https://rarbtc.com"
@@ -50,16 +50,32 @@ log = logging.getLogger("rarbtc-bot")
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def validate_env() -> None:
-    """Abort early if any required credential is missing."""
-    missing = [v for v, k in [
-        ("RARBTC_USERNAME",             USERNAME),
-        ("RARBTC_PASSWORD",             PASSWORD),
-        ("RARBTC_RESERVATION_PASSWORD", RESERVATION_PASSWORD),
-    ] if not k]
+def get_account_credentials(account_num: int):
+    """
+    Load credentials for a given account number.
+    Returns (username, password, reservation_password) or None if secrets missing.
+    """
+    username  = os.environ.get(f"RARBTC_USERNAME_{account_num}", "")
+    password  = os.environ.get(f"RARBTC_PASSWORD_{account_num}", "")
+    res_pass  = os.environ.get(f"RARBTC_RESERVATION_PASSWORD_{account_num}", "")
+    missing   = []
+    if not username:
+        missing.append(f"RARBTC_USERNAME_{account_num}")
+    if not password:
+        missing.append(f"RARBTC_PASSWORD_{account_num}")
+    if not res_pass:
+        missing.append(f"RARBTC_RESERVATION_PASSWORD_{account_num}")
     if missing:
-        log.error("Missing required environment variables: %s", ", ".join(missing))
+        return None, missing
+    return (username, password, res_pass), []
+
+
+def validate_env() -> None:
+    """Warn if ACCOUNT_COUNT is not set. Individual account creds checked at runtime."""
+    if ACCOUNT_COUNT < 1:
+        log.error("ACCOUNT_COUNT must be >= 1. Got: %d", ACCOUNT_COUNT)
         sys.exit(1)
+    log.info("ACCOUNT_COUNT = %d", ACCOUNT_COUNT)
 
 
 def retry(fn, label: str, max_attempts: int = MAX_RETRIES):
@@ -84,13 +100,18 @@ def retry(fn, label: str, max_attempts: int = MAX_RETRIES):
 # ── Core automation ───────────────────────────────────────────────────────────
 
 class RarbtcBot:
-    def __init__(self, page):
-        self.page = page
+    def __init__(self, page, username: str, password: str, reservation_password: str, account_num: int):
+        self.page                 = page
+        self.username             = username
+        self.password             = password
+        self.reservation_password = reservation_password
+        self.account_num          = account_num
+        self.log                  = log  # can be overridden per account
 
     # ── Authentication ────────────────────────────────────────────────────────
 
     def login(self) -> None:
-        log.info("Navigating to login page ...")
+        self.log.info("Navigating to login page ...")
         self.page.goto(f"{BASE_URL}/login", wait_until="domcontentloaded")
         time.sleep(3)
 
@@ -99,7 +120,7 @@ class RarbtcBot:
             cookie_btn = self.page.query_selector("button.accept-btn")
             if cookie_btn and cookie_btn.is_visible():
                 cookie_btn.click()
-                log.info("Dismissed cookie consent popup.")
+                self.log.info("Dismissed cookie consent popup.")
                 time.sleep(1)
         except Exception:
             pass
@@ -109,27 +130,27 @@ class RarbtcBot:
             email_tab = self.page.query_selector("#tab-0")
             if email_tab and email_tab.is_visible():
                 email_tab.click()
-                log.info("Clicked Email login tab.")
+                self.log.info("Clicked Email login tab.")
                 time.sleep(1)
         except Exception:
-            log.warning("Could not click Email login tab — proceeding anyway.")
+            self.log.warning("Could not click Email login tab — proceeding anyway.")
 
         # Step 3: Fill email field (exact placeholder from live site HTML)
-        log.info("Filling email field ...")
-        self.page.fill("input[placeholder='Please enter your email']", USERNAME, timeout=15_000)
-        log.info("Email filled.")
+        self.log.info("Filling email field ...")
+        self.page.fill("input[placeholder='Please enter your email']", self.username, timeout=15_000)
+        self.log.info("Email filled.")
 
         # Step 4: Fill password field (exact placeholder from live site HTML)
-        log.info("Filling password field ...")
-        self.page.fill("input[placeholder='Password must be 8-20 characters or more']", PASSWORD, timeout=15_000)
-        log.info("Password filled.")
+        self.log.info("Filling password field ...")
+        self.page.fill("input[placeholder='Password must be 8-20 characters or more']", self.password, timeout=15_000)
+        self.log.info("Password filled.")
 
         # Step 5: Click the Login button (a <div class="bt flex-center"> on this site)
-        log.info("Clicking Login button ...")
+        self.log.info("Clicking Login button ...")
         self.page.click("div.bt.flex-center", timeout=10_000)
 
         # Wait for URL to actually change away from /login (up to 20s)
-        log.info("Waiting for redirect away from login page ...")
+        self.log.info("Waiting for redirect away from login page ...")
         try:
             self.page.wait_for_url(
                 lambda url: "/login" not in url,
@@ -139,13 +160,13 @@ class RarbtcBot:
             pass  # Fall through to manual check below
 
         time.sleep(5)
-        log.info("Post-login URL: %s", self.page.url)
+        self.log.info("Post-login URL: %s", self.page.url)
 
         # Success = landed anywhere other than /login
         if "/login" in self.page.url:
             raise RuntimeError("Login failed — credentials rejected. Verify GitHub Secrets.")
 
-        log.info("Login successful. Now on: %s", self.page.url)
+        self.log.info("Login successful. Now on: %s", self.page.url)
 
         # Step 6: Close post-login promotional popup
         # Structure confirmed: div.notice-btn > div[Previous] + div[Close]
@@ -155,20 +176,20 @@ class RarbtcBot:
                 close_btn = self.page.query_selector("div.notice-btn div:last-child")
                 if close_btn and close_btn.is_visible():
                     close_btn.click()
-                    log.info("Closed post-login promotional popup (attempt %d).", attempt + 1)
+                    self.log.info("Closed post-login promotional popup (attempt %d).", attempt + 1)
                     time.sleep(10)
                     break
                 else:
-                    log.info("Popup not visible yet, waiting (attempt %d)...", attempt + 1)
+                    self.log.info("Popup not visible yet, waiting (attempt %d)...", attempt + 1)
                     time.sleep(5)
             except Exception as e:
-                log.warning("Popup close attempt %d failed: %s", attempt + 1, e)
+                self.log.warning("Popup close attempt %d failed: %s", attempt + 1, e)
                 time.sleep(5)
 
     # ── Reserve NFT ───────────────────────────────────────────────────────────
 
     def reserve_nft(self) -> None:
-        log.info("Navigating to reservation page ...")
+        self.log.info("Navigating to reservation page ...")
         self.page.goto(RESERVATION_URL, wait_until="domcontentloaded")
         time.sleep(10)
 
@@ -177,7 +198,7 @@ class RarbtcBot:
             close_btn = self.page.query_selector("div.notice-btn div:last-child")
             if close_btn and close_btn.is_visible():
                 close_btn.click()
-                log.info("Closed popup on reservation page.")
+                self.log.info("Closed popup on reservation page.")
                 time.sleep(10)
         except Exception:
             pass
@@ -187,7 +208,7 @@ class RarbtcBot:
             skip_btn = self.page.query_selector("text='Skip'")
             if skip_btn and skip_btn.is_visible():
                 skip_btn.click()
-                log.info("Dismissed tutorial overlay.")
+                self.log.info("Dismissed tutorial overlay.")
                 time.sleep(5)
         except Exception:
             pass
@@ -199,7 +220,7 @@ class RarbtcBot:
         self.ensure_nfts_cleared_before_reserve()
 
         # Re-navigate to reservation page
-        log.info("Navigating to reservation page before clicking ...")
+        self.log.info("Navigating to reservation page before clicking ...")
         self.page.goto(RESERVATION_URL, wait_until="domcontentloaded")
         time.sleep(10)
 
@@ -212,17 +233,17 @@ class RarbtcBot:
         except Exception:
             pass
 
-        log.info("Clicking Reservation button ...")
+        self.log.info("Clicking Reservation button ...")
         # Confirmed from HTML: <button class="one-bt">Reservation</button>
         self.page.click("button.one-bt", timeout=20_000)
         time.sleep(10)
 
-        log.info("Waiting for Fund password popup ...")
+        self.log.info("Waiting for Fund password popup ...")
         # Confirmed from HTML: hidden text input with maxlength=6 inside div.pw
         self.page.wait_for_selector("div.pw input[type='text']", timeout=20_000)
         time.sleep(5)
 
-        log.info("Entering fund password ...")
+        self.log.info("Entering fund password ...")
         # Click the visual PIN display first to focus the hidden input
         try:
             self.page.click("div.van-password-input", timeout=5_000)
@@ -230,15 +251,15 @@ class RarbtcBot:
         except Exception:
             pass
         # Type directly into the hidden input
-        self.page.fill("div.pw input[type='text']", RESERVATION_PASSWORD, timeout=10_000)
+        self.page.fill("div.pw input[type='text']", self.reservation_password, timeout=10_000)
         time.sleep(10)
 
-        log.info("Clicking Confirm button ...")
+        self.log.info("Clicking Confirm button ...")
         # Confirmed from HTML: button.van-button--primary > div > span.van-button__text "Confirm"
         self.page.click("button.van-button--primary", timeout=10_000)
         time.sleep(10)
 
-        log.info("Waiting up to 3 min for Reservation Successful popup ...")
+        self.log.info("Waiting up to 3 min for Reservation Successful popup ...")
         # Confirmed selector: h3.popup-title "Reservation Successful"
         # with div.but containing View NFT and Sell NFT buttons
         self.page.wait_for_selector(
@@ -246,20 +267,20 @@ class RarbtcBot:
             timeout=POPUP_TIMEOUT_MS,
         )
         time.sleep(5)
-        log.info("Reservation Successful popup appeared.")
+        self.log.info("Reservation Successful popup appeared.")
 
         # Click Sell NFT — second button inside div.but
-        log.info("Clicking Sell NFT in reservation popup ...")
+        self.log.info("Clicking Sell NFT in reservation popup ...")
         self.page.click("div.but button:last-child", timeout=10_000)
         time.sleep(10)
-        log.info("Clicked Sell NFT in reservation success popup.")
+        self.log.info("Clicked Sell NFT in reservation success popup.")
 
     # ── Sell after reservation ────────────────────────────────────────────────
 
     def sell_from_popup(self) -> None:
         # After clicking "Sell NFT" in the Reservation Successful popup,
         # the site navigates to /nft/my where the NFT Sale popup appears
-        log.info("Navigating to My NFT page after reservation sell click ...")
+        self.log.info("Navigating to My NFT page after reservation sell click ...")
         self.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
         time.sleep(10)
 
@@ -268,7 +289,7 @@ class RarbtcBot:
             close_btn = self.page.query_selector("div.notice-btn div:last-child")
             if close_btn and close_btn.is_visible():
                 close_btn.click()
-                log.info("Closed popup on My NFT page.")
+                self.log.info("Closed popup on My NFT page.")
                 time.sleep(10)
         except Exception:
             pass
@@ -278,9 +299,9 @@ class RarbtcBot:
         try:
             self.page.wait_for_selector("text='NFT Sale'", timeout=10_000)
             nft_sale_visible = True
-            log.info("NFT Sale popup appeared automatically.")
+            self.log.info("NFT Sale popup appeared automatically.")
         except Exception:
-            log.info("NFT Sale popup not auto-shown — clicking Sell NFT button manually.")
+            self.log.info("NFT Sale popup not auto-shown — clicking Sell NFT button manually.")
 
         if not nft_sale_visible:
             # Find and click Sell NFT button on the page
@@ -289,43 +310,43 @@ class RarbtcBot:
                 sell_btn = self.page.query_selector("button:has-text('Sell NFT')")
             if sell_btn and sell_btn.is_visible():
                 sell_btn.click()
-                log.info("Clicked Sell NFT button.")
+                self.log.info("Clicked Sell NFT button.")
                 time.sleep(10)
                 # Wait for NFT Sale popup
                 self.page.wait_for_selector("text='NFT Sale'", timeout=15_000)
-                log.info("NFT Sale popup appeared.")
+                self.log.info("NFT Sale popup appeared.")
             else:
-                log.warning("No Sell NFT button found — NFT may already be listed.")
+                self.log.warning("No Sell NFT button found — NFT may already be listed.")
                 return
 
         time.sleep(5)
         # Click Sell NFT inside the popup
         self.page.click("button.van-button--primary", timeout=10_000)
-        log.info("Clicked Sell NFT in sale popup.")
+        self.log.info("Clicked Sell NFT in sale popup.")
         time.sleep(10)
 
         # Success popup
-        log.info("Waiting for sale confirmation ...")
+        self.log.info("Waiting for sale confirmation ...")
         self.page.wait_for_selector(
             "text='Selling application submitted successfully'",
             timeout=20_000
         )
-        log.info("Sale submitted successfully.")
+        self.log.info("Sale submitted successfully.")
         try:
             self.page.click("button.van-button--primary", timeout=5_000)
-            log.info("Clicked I understand.")
+            self.log.info("Clicked I understand.")
         except Exception:
-            log.info("I understand button already gone — sale confirmed.")
+            self.log.info("I understand button already gone — sale confirmed.")
         time.sleep(10)
 
-        log.info("Waiting 5 minutes before next cycle ...")
+        self.log.info("Waiting 5 minutes before next cycle ...")
         time.sleep(300)
-        log.info("5 minute wait complete.")
+        self.log.info("5 minute wait complete.")
 
     # ── Sell from My NFTs page ────────────────────────────────────────────────
 
     def sell_from_my_nfts(self) -> None:
-        log.info("Navigating to My NFTs page ...")
+        self.log.info("Navigating to My NFTs page ...")
         self.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
         time.sleep(10)
 
@@ -334,7 +355,7 @@ class RarbtcBot:
             close_btn = self.page.query_selector("div.notice-btn div:last-child")
             if close_btn and close_btn.is_visible():
                 close_btn.click()
-                log.info("Closed popup on My NFTs page.")
+                self.log.info("Closed popup on My NFTs page.")
                 time.sleep(10)
         except Exception:
             pass
@@ -347,7 +368,7 @@ class RarbtcBot:
                 # Confirm it's the total number that's 0
                 total_el = self.page.query_selector("div.van-list")
                 if not total_el or not total_el.query_selector("li"):
-                    log.info("No NFTs available on My NFTs page — nothing to sell.")
+                    self.log.info("No NFTs available on My NFTs page — nothing to sell.")
                     return
         except Exception:
             pass
@@ -359,12 +380,12 @@ class RarbtcBot:
             sell_buttons = self.page.query_selector_all("button:has-text('Sell NFT')")
 
         if not sell_buttons:
-            log.info("No Sell NFT buttons found — nothing to sell.")
+            self.log.info("No Sell NFT buttons found — nothing to sell.")
             return
 
-        log.info("Found %d NFT(s) to sell.", len(sell_buttons))
+        self.log.info("Found %d NFT(s) to sell.", len(sell_buttons))
         for i, btn in enumerate(sell_buttons, 1):
-            log.info("Processing NFT %d/%d ...", i, len(sell_buttons))
+            self.log.info("Processing NFT %d/%d ...", i, len(sell_buttons))
             try:
                 btn.click()
                 time.sleep(10)
@@ -372,7 +393,7 @@ class RarbtcBot:
                 # NFT Sale popup appears — click "Sell NFT" button inside it
                 # Confirmed: span.van-button__text "Sell NFT" inside button.van-button--primary
                 self.page.click("button.van-button--primary", timeout=15_000)
-                log.info("Clicked Sell NFT in sale popup.")
+                self.log.info("Clicked Sell NFT in sale popup.")
                 time.sleep(10)
 
                 # Success popup: "Selling application submitted successfully"
@@ -380,26 +401,26 @@ class RarbtcBot:
                     "text='Selling application submitted successfully'",
                     timeout=20_000
                 )
-                log.info("Sale submitted successfully for NFT %d.", i)
+                self.log.info("Sale submitted successfully for NFT %d.", i)
                 # Click "I understand" — popup may auto-close, so don't fail if button gone
                 try:
                     self.page.click("button.van-button--primary", timeout=5_000)
-                    log.info("Clicked I understand.")
+                    self.log.info("Clicked I understand.")
                 except Exception:
-                    log.info("I understand button already gone — sale confirmed.")
+                    self.log.info("I understand button already gone — sale confirmed.")
                 time.sleep(10)
 
             except Exception as e:
-                log.warning("Error selling NFT %d: %s", i, e)
+                self.log.warning("Error selling NFT %d: %s", i, e)
                 continue
 
-        log.info("My NFTs sell step complete.")
+        self.log.info("My NFTs sell step complete.")
 
     # ── Full single cycle ─────────────────────────────────────────────────────
 
     def get_reservations_available(self) -> int:
         """Navigate to reservation page and return number of reservations available today."""
-        log.info("Checking reservations available today ...")
+        self.log.info("Checking reservations available today ...")
         self.page.goto(RESERVATION_URL, wait_until="domcontentloaded")
         time.sleep(10)
 
@@ -408,7 +429,7 @@ class RarbtcBot:
             close_btn = self.page.query_selector("div.notice-btn div:last-child")
             if close_btn and close_btn.is_visible():
                 close_btn.click()
-                log.info("Closed popup on reservation page.")
+                self.log.info("Closed popup on reservation page.")
                 time.sleep(10)
         except Exception:
             pass
@@ -418,7 +439,7 @@ class RarbtcBot:
             skip_btn = self.page.query_selector("text='Skip'")
             if skip_btn and skip_btn.is_visible():
                 skip_btn.click()
-                log.info("Dismissed tutorial overlay.")
+                self.log.info("Dismissed tutorial overlay.")
                 time.sleep(5)
         except Exception:
             pass
@@ -434,14 +455,14 @@ class RarbtcBot:
                         if val_el:
                             txt = val_el.inner_text().strip().replace("Times", "").strip()
                             count = int(txt)
-                            log.info("Reservations available today: %d", count)
+                            self.log.info("Reservations available today: %d", count)
                             return count
                 except Exception:
                     continue
         except Exception as e:
-            log.warning("Could not read reservation count via DOM: %s", e)
+            self.log.warning("Could not read reservation count via DOM: %s", e)
 
-        log.warning("Could not determine reservation count — assuming 0.")
+        self.log.warning("Could not determine reservation count — assuming 0.")
         return 0
 
     def get_nft_total_count(self) -> int:
@@ -463,11 +484,11 @@ class RarbtcBot:
                 "button[data-v-5055aed9], button:has-text('Sell NFT')"
             )
             count = len(sell_btns)
-            log.info("NFT total (by sell buttons): %d", count)
+            self.log.info("NFT total (by sell buttons): %d", count)
             return count
 
         except Exception as e:
-            log.warning("Could not read NFT total count: %s", e)
+            self.log.warning("Could not read NFT total count: %s", e)
         return 0
 
     def ensure_nfts_cleared_before_reserve(self) -> None:
@@ -476,34 +497,34 @@ class RarbtcBot:
         nfts = self.get_nft_total_count()
 
         if nfts == 0:
-            log.info("NFT total: 0 piece(s) — ready to reserve.")
+            self.log.info("NFT total: 0 piece(s) — ready to reserve.")
             return
 
-        log.info("%d NFT(s) found — selling before reservation ...", nfts)
+        self.log.info("%d NFT(s) found — selling before reservation ...", nfts)
         retry(self.sell_from_my_nfts, label="PreReserve:SellNFTs")
         time.sleep(10)
 
-        log.info("Waiting 5 minutes for sale to reflect ...")
+        self.log.info("Waiting 5 minutes for sale to reflect ...")
         time.sleep(300)
 
         self.ensure_logged_in()
         nfts = self.get_nft_total_count()
         if nfts == 0:
-            log.info("NFT total now 0 — proceeding to reserve.")
+            self.log.info("NFT total now 0 — proceeding to reserve.")
             return
 
-        log.info("%d NFT(s) still present — waiting another 5 minutes ...", nfts)
+        self.log.info("%d NFT(s) still present — waiting another 5 minutes ...", nfts)
         time.sleep(300)
         self.ensure_logged_in()
         nfts = self.get_nft_total_count()
         if nfts == 0:
-            log.info("NFT total now 0 — proceeding to reserve.")
+            self.log.info("NFT total now 0 — proceeding to reserve.")
         else:
-            log.warning("%d NFT(s) still present after wait — proceeding anyway.", nfts)
+            self.log.warning("%d NFT(s) still present after wait — proceeding anyway.", nfts)
 
     def get_nfts_available(self) -> int:
         """Navigate to My NFT page and return total NFT count."""
-        log.info("Checking NFTs available on My NFT page ...")
+        self.log.info("Checking NFTs available on My NFT page ...")
         self.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
         time.sleep(10)
 
@@ -512,7 +533,7 @@ class RarbtcBot:
             close_btn = self.page.query_selector("div.notice-btn div:last-child")
             if close_btn and close_btn.is_visible():
                 close_btn.click()
-                log.info("Closed popup on My NFT page.")
+                self.log.info("Closed popup on My NFT page.")
                 time.sleep(10)
         except Exception:
             pass
@@ -523,15 +544,15 @@ class RarbtcBot:
             match = _re.search(r"(\d+)\s*piece", page_text)
             if match:
                 count = int(match.group(1))
-                log.info("NFTs available: %d", count)
+                self.log.info("NFTs available: %d", count)
                 return count
             # Fallback: look for sell buttons
             sell_btns = self.page.query_selector_all("button[data-v-5055aed9], button:has-text('Sell NFT')")
             count = len(sell_btns)
-            log.info("NFTs available (by sell buttons): %d", count)
+            self.log.info("NFTs available (by sell buttons): %d", count)
             return count
         except Exception as e:
-            log.warning("Could not read NFT count: %s", e)
+            self.log.warning("Could not read NFT count: %s", e)
 
         return 0
 
@@ -542,14 +563,14 @@ class RarbtcBot:
                 "button[data-v-5055aed9], button:has-text('Sell NFT')"
             )
             count = len(sell_btns)
-            log.info("NFT total number (sell buttons): %d", count)
+            self.log.info("NFT total number (sell buttons): %d", count)
             return count
         except Exception as e:
-            log.warning("Could not read NFT total: %s", e)
+            self.log.warning("Could not read NFT total: %s", e)
             return 0
 
     def ensure_no_nfts_before_reserve(self) -> None:
-        log.info("Checking NFT total before reservation ...")
+        self.log.info("Checking NFT total before reservation ...")
         self.ensure_logged_in()
         self.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
         time.sleep(10)
@@ -562,19 +583,19 @@ class RarbtcBot:
             pass
         nft_total = self._get_nft_total_number()
         if nft_total == 0:
-            log.info("NFT total = 0 — proceeding with reservation.")
+            self.log.info("NFT total = 0 — proceeding with reservation.")
             return
-        log.info("NFT total = %d — selling before reservation ...", nft_total)
+        self.log.info("NFT total = %d — selling before reservation ...", nft_total)
         retry(self.sell_from_my_nfts, label="PreReserve:SellNFTs")
-        log.info("Waiting 5 minutes for funds to reflect ...")
+        self.log.info("Waiting 5 minutes for funds to reflect ...")
         time.sleep(300)
         self.ensure_logged_in()
-        log.info("Proceeding with reservation.")
+        self.log.info("Proceeding with reservation.")
 
     def ensure_logged_in(self) -> None:
         """Re-login if session has expired, then close popup."""
         if "/login" in self.page.url:
-            log.warning("Session expired — re-logging in ...")
+            self.log.warning("Session expired — re-logging in ...")
             retry(self.login, label="ReLogin")
             # After re-login the promotional popup always appears — close it
             time.sleep(5)
@@ -583,7 +604,7 @@ class RarbtcBot:
                     close_btn = self.page.query_selector("div.notice-btn div:last-child")
                     if close_btn and close_btn.is_visible():
                         close_btn.click()
-                        log.info("Closed popup after re-login.")
+                        self.log.info("Closed popup after re-login.")
                         time.sleep(10)
                         break
                     time.sleep(5)
@@ -591,7 +612,7 @@ class RarbtcBot:
                     time.sleep(5)
 
     def run_cycle(self, cycle_num: int) -> None:
-        log.info("=== Starting cycle %d/%d ===", cycle_num, MAX_CYCLES)
+        self.log.info("=== Starting cycle %d/%d ===", cycle_num, MAX_CYCLES)
 
         self.ensure_logged_in()
 
@@ -599,22 +620,22 @@ class RarbtcBot:
         reservations = self.get_reservations_available()
 
         if reservations == 0:
-            log.info("No reservations available — checking My NFT page for unsold NFTs.")
+            self.log.info("No reservations available — checking My NFT page for unsold NFTs.")
             self.ensure_logged_in()
             nfts = self.get_nfts_available()
             if nfts > 0:
-                log.info("%d NFT(s) found — selling ...", nfts)
+                self.log.info("%d NFT(s) found — selling ...", nfts)
                 retry(self.sell_from_my_nfts, label=f"Cycle{cycle_num}:SellMyNFTs")
             else:
-                log.info("No NFTs to sell either — cycle complete.")
+                self.log.info("No NFTs to sell either — cycle complete.")
 
         elif reservations == 1:
-            log.info("1 reservation available — selling existing NFTs first, then reserving.")
+            self.log.info("1 reservation available — selling existing NFTs first, then reserving.")
             # Step 1: Sell any existing NFTs first
             self.ensure_logged_in()
             nfts = self.get_nfts_available()
             if nfts > 0:
-                log.info("%d existing NFT(s) found — selling before reservation.", nfts)
+                self.log.info("%d existing NFT(s) found — selling before reservation.", nfts)
                 retry(self.sell_from_my_nfts, label=f"Cycle{cycle_num}:SellExisting")
                 time.sleep(10)
             # Step 2: Do the 1 reservation and sell
@@ -624,12 +645,12 @@ class RarbtcBot:
             retry(self.sell_from_popup, label=f"Cycle{cycle_num}:SellPopup")
 
         else:
-            log.info("Reservations available: %d — proceeding with reserve + sell.", reservations)
+            self.log.info("Reservations available: %d — proceeding with reserve + sell.", reservations)
             # Step 1: Sell any existing NFTs first
             self.ensure_logged_in()
             nfts = self.get_nfts_available()
             if nfts > 0:
-                log.info("%d existing NFT(s) found — selling before reservation.", nfts)
+                self.log.info("%d existing NFT(s) found — selling before reservation.", nfts)
                 retry(self.sell_from_my_nfts, label=f"Cycle{cycle_num}:SellExisting")
                 time.sleep(10)
             # Step 2: Reserve and sell
@@ -638,17 +659,52 @@ class RarbtcBot:
             self.ensure_logged_in()
             retry(self.sell_from_popup, label=f"Cycle{cycle_num}:SellPopup")
 
-        log.info("=== Cycle %d complete. ===", cycle_num)
+        self.log.info("=== Cycle %d complete. ===", cycle_num)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def main() -> None:
-    validate_env()
-    log.info("╔══════════════════════════════════════╗")
-    log.info("║  rarbtc.com NFT Bot  —  Run started  ║")
-    log.info("╚══════════════════════════════════════╝")
-    log.info("Log file: %s", log_filename)
+def run_account(account_num: int) -> bool:
+    """
+    Run the full bot flow for a single account.
+    Returns True on success, False on failure.
+    Sets up its own log file, browser context, and credentials.
+    """
+    # Load credentials for this account
+    creds, missing = get_account_credentials(account_num)
+    if creds is None:
+        acct_log = logging.getLogger(f"rarbtc-bot-acct{account_num}")
+        acct_log.warning(
+            "Account %d SKIPPED — missing secrets: %s",
+            account_num, ", ".join(missing)
+        )
+        # Write skip record to account-specific log file
+        skip_log = logs_dir / f"account_{account_num}_SKIPPED_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.log"
+        skip_log.write_text(
+            f"Account {account_num} skipped at {datetime.utcnow()} UTC\n"
+            f"Reason: Missing GitHub Secrets: {', '.join(missing)}\n",
+            encoding="utf-8"
+        )
+        return False
+
+    username, password, reservation_password = creds
+
+    # Account-specific log file
+    acct_log_filename = logs_dir / f"account_{account_num}_bot_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.log"
+    acct_handler = logging.FileHandler(acct_log_filename, encoding="utf-8")
+    acct_handler.setFormatter(logging.Formatter(
+        "%(asctime)s UTC | %(levelname)-8s | %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S"
+    ))
+    acct_logger = logging.getLogger(f"rarbtc-bot-acct{account_num}")
+    acct_logger.setLevel(logging.INFO)
+    acct_logger.addHandler(acct_handler)
+    acct_logger.addHandler(logging.StreamHandler(sys.stdout))
+
+    acct_logger.info("=" * 50)
+    acct_logger.info("  ACCOUNT %d — Run started", account_num)
+    acct_logger.info("  Log: %s", acct_log_filename)
+    acct_logger.info("=" * 50)
 
     with sync_playwright() as pw:
         browser = pw.chromium.launch(
@@ -668,7 +724,9 @@ def main() -> None:
             viewport={"width": 1280, "height": 800},
         )
         page = context.new_page()
-        bot  = RarbtcBot(page)
+        bot  = RarbtcBot(page, username, password, reservation_password, account_num)
+        # Point bot logging to account logger
+        bot.log = acct_logger
 
         try:
             retry(bot.login, label="Login")
@@ -676,40 +734,63 @@ def main() -> None:
             for cycle in range(1, MAX_CYCLES + 1):
                 bot.run_cycle(cycle)
 
-            log.info("✅ All %d cycles completed successfully.", MAX_CYCLES)
+            acct_logger.info("Account %d — All %d cycles completed successfully.", account_num, MAX_CYCLES)
+            return True
 
         except Exception as exc:
-            log.error("FATAL ERROR - aborting run: %s", exc, exc_info=True)
+            acct_logger.error("Account %d — FATAL ERROR: %s", account_num, exc, exc_info=True)
             ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-
-            # Log current URL at time of crash
             try:
-                log.info("URL at crash: %s", page.url)
+                acct_logger.info("URL at crash: %s", page.url)
             except Exception:
                 pass
-
-            # Save full-page screenshot for visual debugging
-            screenshot_path = logs_dir / f"error_{ts}.png"
             try:
+                screenshot_path = logs_dir / f"account_{account_num}_error_{ts}.png"
                 page.screenshot(path=str(screenshot_path), full_page=True)
-                log.info("Screenshot saved: %s", screenshot_path)
-            except Exception as se:
-                log.warning("Could not save screenshot: %s", se)
-
-            # Save page HTML so you can inspect real CSS selectors on the live site
-            html_path = logs_dir / f"error_page_{ts}.html"
+                acct_logger.info("Screenshot: %s", screenshot_path)
+            except Exception:
+                pass
             try:
+                html_path = logs_dir / f"account_{account_num}_error_page_{ts}.html"
                 html_path.write_text(page.content(), encoding="utf-8")
-                log.info("Page HTML saved: %s - open this to find correct selectors", html_path)
-            except Exception as he:
-                log.warning("Could not save page HTML: %s", he)
-
-            sys.exit(1)
+                acct_logger.info("Page HTML: %s", html_path)
+            except Exception:
+                pass
+            return False
 
         finally:
             context.close()
             browser.close()
-            log.info("Browser closed. Run finished at %s UTC.", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
+            acct_logger.info(
+                "Account %d — Browser closed at %s UTC.",
+                account_num,
+                datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+            )
+            acct_handler.close()
+            acct_logger.removeHandler(acct_handler)
+
+
+def main() -> None:
+    validate_env()
+    log.info("╔══════════════════════════════════════╗")
+    log.info("║   rarbtc.com NFT Bot  —  Run started ║")
+    log.info("╚══════════════════════════════════════╝")
+    log.info("Running %d account(s) sequentially.", ACCOUNT_COUNT)
+
+    results = {}
+    for account_num in range(1, ACCOUNT_COUNT + 1):
+        log.info("─" * 50)
+        log.info("Starting Account %d of %d ...", account_num, ACCOUNT_COUNT)
+        success = run_account(account_num)
+        results[account_num] = "SUCCESS" if success else "FAILED/SKIPPED"
+        log.info("Account %d result: %s", account_num, results[account_num])
+
+    log.info("─" * 50)
+    log.info("All accounts processed. Summary:")
+    for acct, result in results.items():
+        log.info("  Account %d: %s", acct, result)
+    log.info("Run finished at %s UTC.", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
+
 
 
 if __name__ == "__main__":
