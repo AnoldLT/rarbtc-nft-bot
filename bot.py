@@ -1,5 +1,5 @@
 """
-rarbtc.com NFT Trading Automation Bot by ALT
+rarbtc.com NFT Trading Automation Bot
 Performs up to 2 buy-sell cycles per day, fully headless via Playwright.
 Credentials are loaded from environment variables — never hardcoded.
 """
@@ -192,6 +192,23 @@ class RarbtcBot:
         except Exception:
             pass
 
+        # Check amount available before reserving
+        self.ensure_enough_balance()
+
+        # Re-navigate to reservation page in case ensure_enough_balance redirected
+        log.info("Navigating to reservation page before clicking ...")
+        self.page.goto(RESERVATION_URL, wait_until="domcontentloaded")
+        time.sleep(10)
+
+        # Close popup if reappeared
+        try:
+            close_btn = self.page.query_selector("div.notice-btn div:last-child")
+            if close_btn and close_btn.is_visible():
+                close_btn.click()
+                time.sleep(5)
+        except Exception:
+            pass
+
         log.info("Clicking Reservation button ...")
         # Confirmed from HTML: <button class="one-bt">Reservation</button>
         self.page.click("button.one-bt", timeout=20_000)
@@ -218,70 +235,41 @@ class RarbtcBot:
         self.page.click("button.van-button--primary", timeout=10_000)
         time.sleep(10)
 
-        log.info("Waiting up to 3 min for order confirmation ...")
-        # Try broad selectors — we'll refine once we see the confirmation popup HTML
-        try:
-            self.page.wait_for_selector(
-                "text='Sell', text='SELL', button:has-text('Sell'), "
-                "[class*='sell'], text='NFT On Sale', text='Completed', "
-                "text='Success', [class*='success'], [class*='complete']",
-                timeout=POPUP_TIMEOUT_MS,
-            )
-            log.info("Order confirmation appeared.")
-        except Exception:
-            # Save page HTML so we can see what actually appeared after 3 min
-            log.warning("Confirmation popup not detected — saving page state for selector inspection ...")
-            ts = __import__("datetime").datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-            try:
-                html_path = Path("logs") / f"after_reserve_{ts}.html"
-                html_path.write_text(self.page.content(), encoding="utf-8")
-                self.page.screenshot(path=str(Path("logs") / f"after_reserve_{ts}.png"), full_page=True)
-                log.info("Saved post-reserve page: %s", html_path)
-            except Exception as se:
-                log.warning("Could not save page state: %s", se)
-            raise
+        log.info("Waiting up to 3 min for Reservation Successful popup ...")
+        # Confirmed selector: h3.popup-title "Reservation Successful"
+        # with div.but containing View NFT and Sell NFT buttons
+        self.page.wait_for_selector(
+            "text='Reservation Successful'",
+            timeout=POPUP_TIMEOUT_MS,
+        )
+        time.sleep(5)
+        log.info("Reservation Successful popup appeared.")
+
+        # Click Sell NFT — second button inside div.but
+        log.info("Clicking Sell NFT in reservation popup ...")
+        self.page.click("div.but button:last-child", timeout=10_000)
         time.sleep(10)
+        log.info("Clicked Sell NFT in reservation success popup.")
 
     # ── Sell after reservation ────────────────────────────────────────────────
 
     def sell_from_popup(self) -> None:
-        # After reservation confirmation, navigate to My NFT page to sell
-        # The flow goes: reservation done → /nft/my → sell from there
-        log.info("Navigating to My NFT page to sell reserved NFT ...")
-        self.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
+        # After clicking Sell NFT in the reservation success popup,
+        # the NFT Sale popup appears with price details and a Sell NFT button
+        log.info("Waiting for NFT Sale popup ...")
+        # Confirmed: button.van-button--primary with span.van-button__text "Sell NFT"
+        self.page.wait_for_selector(
+            "text='NFT Sale'",
+            timeout=20_000
+        )
+        time.sleep(5)
+        log.info("NFT Sale popup appeared — clicking Sell NFT ...")
+        self.page.click("button.van-button--primary", timeout=10_000)
         time.sleep(10)
 
-        # Close popup if present
-        try:
-            close_btn = self.page.query_selector("div.notice-btn div:last-child")
-            if close_btn and close_btn.is_visible():
-                close_btn.click()
-                log.info("Closed popup on My NFTs page.")
-                time.sleep(10)
-        except Exception:
-            pass
-
-        # Find Sell NFT button — confirmed: button[data-v-5055aed9]
-        sell_btn = self.page.query_selector("button[data-v-5055aed9]")
-        if not sell_btn:
-            sell_btn = self.page.query_selector("button:has-text('Sell NFT')")
-
-        if not sell_btn:
-            log.warning("No Sell NFT button found on My NFT page after reservation.")
-            return
-
-        sell_btn.click()
-        log.info("Clicked Sell NFT button.")
-        time.sleep(10)
-
-        # NFT Sale popup — click Sell NFT inside it
-        # Confirmed: button.van-button--primary > div > span.van-button__text "Sell NFT"
-        self.page.click("button.van-button--primary", timeout=15_000)
-        log.info("Clicked Sell NFT in sale popup.")
-        time.sleep(10)
-
-        # Success popup — "Selling application submitted successfully"
-        # Click "I understand" button
+        # Success popup: "Selling application submitted successfully"
+        # Click "I understand" — confirmed: button.van-button--primary
+        log.info("Waiting for sale confirmation ...")
         self.page.wait_for_selector(
             "text='Selling application submitted successfully'",
             timeout=20_000
@@ -291,9 +279,9 @@ class RarbtcBot:
         log.info("Clicked I understand.")
         time.sleep(10)
 
-        log.info("Waiting 10 min before next cycle ...")
-        time.sleep(600)  # 10 minutes as requested
-        log.info("Wait complete — proceeding to next cycle.")
+        log.info("Waiting 10 minutes before next cycle ...")
+        time.sleep(600)
+        log.info("10 minute wait complete.")
 
     # ── Sell from My NFTs page ────────────────────────────────────────────────
 
@@ -367,6 +355,150 @@ class RarbtcBot:
 
     # ── Full single cycle ─────────────────────────────────────────────────────
 
+    def get_reservations_available(self) -> int:
+        """Navigate to reservation page and return number of reservations available today."""
+        log.info("Checking reservations available today ...")
+        self.page.goto(RESERVATION_URL, wait_until="domcontentloaded")
+        time.sleep(10)
+
+        # Close promotional popup if present
+        try:
+            close_btn = self.page.query_selector("div.notice-btn div:last-child")
+            if close_btn and close_btn.is_visible():
+                close_btn.click()
+                log.info("Closed popup on reservation page.")
+                time.sleep(10)
+        except Exception:
+            pass
+
+        # Dismiss tutorial overlay if present
+        try:
+            skip_btn = self.page.query_selector("text='Skip'")
+            if skip_btn and skip_btn.is_visible():
+                skip_btn.click()
+                log.info("Dismissed tutorial overlay.")
+                time.sleep(5)
+        except Exception:
+            pass
+
+        # Read reservation count — div.val contains "X Times"
+        try:
+            page_text = self.page.inner_text("body")
+            import re as _re
+            match = _re.search(r"(\d+)\s*Times\s*\n.*?Number of reservations available", page_text, _re.DOTALL)
+            if match:
+                count = int(match.group(1))
+                log.info("Reservations available today: %d", count)
+                return count
+            # Fallback: find all div.val elements
+            val_els = self.page.query_selector_all("div.val")
+            for el in val_els:
+                txt = el.inner_text().strip()
+                if "Times" in txt:
+                    count = int(txt.replace("Times", "").strip())
+                    log.info("Reservations available today: %d", count)
+                    return count
+        except Exception as e:
+            log.warning("Could not read reservation count: %s", e)
+
+        log.warning("Could not determine reservation count — assuming 0.")
+        return 0
+
+    def get_amount_available(self) -> float:
+        """Read the Amount available for reservation from the reservation page."""
+        try:
+            page_text = self.page.inner_text("body")
+            import re as _re
+            # Looks for pattern like "250 USDT\nAmount available for reservation"
+            match = _re.search(r"([\d.]+)\s*USDT[\s\S]*?Amount available for reservation", page_text)
+            if match:
+                amount = float(match.group(1))
+                log.info("Amount available for reservation: %.2f USDT", amount)
+                return amount
+            # Fallback: find all div.val elements
+            val_els = self.page.query_selector_all("div.val")
+            for el in val_els:
+                txt = el.inner_text().strip()
+                if "USDT" in txt and "." in txt:
+                    try:
+                        amount = float(txt.replace("USDT", "").strip())
+                        log.info("Amount available for reservation: %.2f USDT", amount)
+                        return amount
+                    except ValueError:
+                        continue
+        except Exception as e:
+            log.warning("Could not read amount available: %s", e)
+        log.warning("Could not determine amount available — assuming 0.")
+        return 0.0
+
+    def ensure_enough_balance(self) -> None:
+        """
+        Before reserving, check amount available is >= 250 USDT.
+        If not, sell any existing NFTs and wait 10 min for funds to reflect.
+        Then proceed regardless (even if still below 250).
+        """
+        amount = self.get_amount_available()
+        if amount >= 250:
+            log.info("Amount available %.2f USDT >= 250 — proceeding with reservation.", amount)
+            return
+
+        log.warning("Amount available %.2f USDT < 250 — checking My NFT page for unsold NFTs ...", amount)
+        self.ensure_logged_in()
+        nfts = self.get_nfts_available()
+
+        if nfts > 0:
+            log.info("%d NFT(s) found — selling to free up balance ...", nfts)
+            retry(self.sell_from_my_nfts, label="BalanceCheck:SellNFTs")
+        else:
+            log.info("No NFTs to sell — will wait 10 min and proceed anyway.")
+
+        log.info("Waiting 10 minutes for funds to reflect ...")
+        time.sleep(600)
+
+        # Re-check amount after wait
+        self.ensure_logged_in()
+        self.page.goto(RESERVATION_URL, wait_until="domcontentloaded")
+        time.sleep(10)
+        amount = self.get_amount_available()
+        if amount >= 250:
+            log.info("Amount now %.2f USDT >= 250 — proceeding.", amount)
+        else:
+            log.warning("Amount still %.2f USDT < 250 after wait — proceeding anyway.", amount)
+
+    def get_nfts_available(self) -> int:
+        """Navigate to My NFT page and return total NFT count."""
+        log.info("Checking NFTs available on My NFT page ...")
+        self.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
+        time.sleep(10)
+
+        # Close promotional popup if present
+        try:
+            close_btn = self.page.query_selector("div.notice-btn div:last-child")
+            if close_btn and close_btn.is_visible():
+                close_btn.click()
+                log.info("Closed popup on My NFT page.")
+                time.sleep(10)
+        except Exception:
+            pass
+
+        try:
+            page_text = self.page.inner_text("body")
+            import re as _re
+            match = _re.search(r"(\d+)\s*piece\s*\n.*?NFT total number", page_text, _re.DOTALL)
+            if match:
+                count = int(match.group(1))
+                log.info("NFTs available: %d", count)
+                return count
+            # Fallback: look for sell buttons
+            sell_btns = self.page.query_selector_all("button[data-v-5055aed9], button:has-text('Sell NFT')")
+            count = len(sell_btns)
+            log.info("NFTs available (by sell buttons): %d", count)
+            return count
+        except Exception as e:
+            log.warning("Could not read NFT count: %s", e)
+
+        return 0
+
     def ensure_logged_in(self) -> None:
         """Re-login if session has expired, then close popup."""
         if "/login" in self.page.url:
@@ -390,12 +522,49 @@ class RarbtcBot:
         log.info("═══ Starting cycle %d/%d ═══", cycle_num, MAX_CYCLES)
 
         self.ensure_logged_in()
-        retry(self.reserve_nft,       label=f"Cycle{cycle_num}:Reserve")
-        self.ensure_logged_in()
-        retry(self.sell_from_popup,   label=f"Cycle{cycle_num}:SellPopup")
-        # Check for any remaining NFTs after the sell
-        self.ensure_logged_in()
-        retry(self.sell_from_my_nfts, label=f"Cycle{cycle_num}:SellMyNFTs")
+
+        # Check reservations available FIRST on every cycle
+        reservations = self.get_reservations_available()
+
+        if reservations == 0:
+            log.info("No reservations available — checking My NFT page for unsold NFTs.")
+            self.ensure_logged_in()
+            nfts = self.get_nfts_available()
+            if nfts > 0:
+                log.info("%d NFT(s) found — selling ...", nfts)
+                retry(self.sell_from_my_nfts, label=f"Cycle{cycle_num}:SellMyNFTs")
+            else:
+                log.info("No NFTs to sell either — cycle complete.")
+
+        elif reservations == 1:
+            log.info("1 reservation available — selling existing NFTs first, then reserving.")
+            # Step 1: Sell any existing NFTs first
+            self.ensure_logged_in()
+            nfts = self.get_nfts_available()
+            if nfts > 0:
+                log.info("%d existing NFT(s) found — selling before reservation.", nfts)
+                retry(self.sell_from_my_nfts, label=f"Cycle{cycle_num}:SellExisting")
+                time.sleep(10)
+            # Step 2: Do the 1 reservation and sell
+            self.ensure_logged_in()
+            retry(self.reserve_nft,     label=f"Cycle{cycle_num}:Reserve")
+            self.ensure_logged_in()
+            retry(self.sell_from_popup, label=f"Cycle{cycle_num}:SellPopup")
+
+        else:
+            log.info("Reservations available: %d — proceeding with reserve + sell.", reservations)
+            # Step 1: Sell any existing NFTs first
+            self.ensure_logged_in()
+            nfts = self.get_nfts_available()
+            if nfts > 0:
+                log.info("%d existing NFT(s) found — selling before reservation.", nfts)
+                retry(self.sell_from_my_nfts, label=f"Cycle{cycle_num}:SellExisting")
+                time.sleep(10)
+            # Step 2: Reserve and sell
+            self.ensure_logged_in()
+            retry(self.reserve_nft,     label=f"Cycle{cycle_num}:Reserve")
+            self.ensure_logged_in()
+            retry(self.sell_from_popup, label=f"Cycle{cycle_num}:SellPopup")
 
         log.info("═══ Cycle %d complete. ═══", cycle_num)
 
