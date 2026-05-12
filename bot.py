@@ -137,6 +137,30 @@ class RarbtcBot:
 
         log.info("Login successful.")
 
+        # Step 6: Close post-login promotional popup if present
+        # The popup has a notice-btn div containing Previous and Close divs
+        time.sleep(2)
+        try:
+            # Get all divs inside notice-btn — Close is the second one
+            close_btn = self.page.query_selector("div.notice-btn div:nth-child(2)")
+            if close_btn and close_btn.is_visible():
+                close_btn.click()
+                log.info("Closed post-login promotional popup.")
+                time.sleep(1)
+            else:
+                # Fallback: find any visible div with exact text "Close"
+                for el in self.page.query_selector_all("div"):
+                    try:
+                        if el.inner_text().strip() == "Close" and el.is_visible():
+                            el.click()
+                            log.info("Closed popup via text fallback.")
+                            time.sleep(1)
+                            break
+                    except Exception:
+                        continue
+        except Exception as e:
+            log.warning("Could not close post-login popup (may not have appeared): %s", e)
+
     # ── Reserve NFT ───────────────────────────────────────────────────────────
 
     def reserve_nft(self) -> None:
