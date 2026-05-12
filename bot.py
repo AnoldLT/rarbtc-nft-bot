@@ -1,5 +1,5 @@
 """
-rarbtc.com NFT Trading Automation Bot
+rarbtc.com NFT Trading Automation Bot by ALT
 Performs up to 2 buy-sell cycles per day, fully headless via Playwright.
 Credentials are loaded from environment variables — never hardcoded.
 """

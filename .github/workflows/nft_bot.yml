@@ -2,6 +2,7 @@
 #  GitHub Actions Workflow
 #  Runs the rarbtc.com NFT bot daily at 08:00 UTC.
 #  Credentials are stored as GitHub Secrets — never in code.
+#  Auther: ALT
 # ─────────────────────────────────────────────────────────────────
 
 name: NFT Bot Daily Run
