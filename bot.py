@@ -520,7 +520,7 @@ class RarbtcBot:
         try:
             page_text = self.page.inner_text("body")
             import re as _re
-            match = _re.search(r"(\d+)\s*piece\s*\n.*?NFT total number", page_text, _re.DOTALL)
+            match = _re.search(r"(\d+)\s*piece", page_text)
             if match:
                 count = int(match.group(1))
                 log.info("NFTs available: %d", count)
@@ -534,6 +534,42 @@ class RarbtcBot:
             log.warning("Could not read NFT count: %s", e)
 
         return 0
+
+
+    def _get_nft_total_number(self) -> int:
+        try:
+            sell_btns = self.page.query_selector_all(
+                "button[data-v-5055aed9], button:has-text('Sell NFT')"
+            )
+            count = len(sell_btns)
+            log.info("NFT total number (sell buttons): %d", count)
+            return count
+        except Exception as e:
+            log.warning("Could not read NFT total: %s", e)
+            return 0
+
+    def ensure_no_nfts_before_reserve(self) -> None:
+        log.info("Checking NFT total before reservation ...")
+        self.ensure_logged_in()
+        self.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
+        time.sleep(10)
+        try:
+            close_btn = self.page.query_selector("div.notice-btn div:last-child")
+            if close_btn and close_btn.is_visible():
+                close_btn.click()
+                time.sleep(5)
+        except Exception:
+            pass
+        nft_total = self._get_nft_total_number()
+        if nft_total == 0:
+            log.info("NFT total = 0 — proceeding with reservation.")
+            return
+        log.info("NFT total = %d — selling before reservation ...", nft_total)
+        retry(self.sell_from_my_nfts, label="PreReserve:SellNFTs")
+        log.info("Waiting 5 minutes for funds to reflect ...")
+        time.sleep(300)
+        self.ensure_logged_in()
+        log.info("Proceeding with reservation.")
 
     def ensure_logged_in(self) -> None:
         """Re-login if session has expired, then close popup."""
