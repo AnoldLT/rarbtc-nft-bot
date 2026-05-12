@@ -1,11 +1,11 @@
 # ─────────────────────────────────────────────────────────────────
 #  GitHub Actions Workflow
-#  Runs the rarbtc.com NFT bot daily at 08:00 UTC.
+#  Runs the rarbtc.com NFT bot daily for two accounts sequentially.
 #  Credentials are stored as GitHub Secrets — never in code.
 #  Auther: ALT
 # ─────────────────────────────────────────────────────────────────
 
-name: NFT Bot Daily Run
+name: NFT Bot Daily Run (Dual Account)
 
 on:
   schedule:
@@ -17,9 +17,9 @@ env:
 
 jobs:
   run-bot:
-    name: Run rarbtc NFT Bot
+    name: Run rarbtc NFT Bot for Two Accounts
     runs-on: ubuntu-latest
-    timeout-minutes: 30     # Safety cap — full run should take ~15 min
+    timeout-minutes: 60     # Increased for two sequential runs
 
     steps:
       # 1. Check out the repository
@@ -69,15 +69,23 @@ jobs:
       - name: Create logs directory
         run: mkdir -p logs
 
-      # 7. Run the bot — credentials injected from GitHub Secrets
-      - name: Run NFT bot
+      # 7. Run the bot for Account 1 — credentials injected from GitHub Secrets
+      - name: Run NFT bot - Account 1
         env:
-          RARBTC_USERNAME:             ${{ secrets.RARBTC_USERNAME }}
-          RARBTC_PASSWORD:             ${{ secrets.RARBTC_PASSWORD }}
-          RARBTC_RESERVATION_PASSWORD: ${{ secrets.RARBTC_RESERVATION_PASSWORD }}
+          RARBTC_USERNAME:             ${{ secrets.RARBTC_USERNAME_1 }}
+          RARBTC_PASSWORD:             ${{ secrets.RARBTC_PASSWORD_1 }}
+          RARBTC_RESERVATION_PASSWORD: ${{ secrets.RARBTC_RESERVATION_PASSWORD_1 }}
         run: python bot.py
 
-      # 8. Upload logs as a downloadable artifact (kept 30 days)
+      # 8. Run the bot for Account 2 — runs after Account 1 completes
+      - name: Run NFT bot - Account 2
+        env:
+          RARBTC_USERNAME:             ${{ secrets.RARBTC_USERNAME_2 }}
+          RARBTC_PASSWORD:             ${{ secrets.RARBTC_PASSWORD_2 }}
+          RARBTC_RESERVATION_PASSWORD: ${{ secrets.RARBTC_RESERVATION_PASSWORD_2 }}
+        run: python bot.py
+
+      # 9. Upload logs as a downloadable artifact (kept 30 days)
       - name: Upload run logs
         if: always()   # Upload even if the bot failed
         uses: actions/upload-artifact@v4.6.2
@@ -87,7 +95,7 @@ jobs:
           retention-days: 30
           if-no-files-found: warn   # Don't fail if logs dir is empty
 
-      # 9. Upload error screenshot if one was saved
+      # 10. Upload error screenshot if one was saved
       - name: Upload error screenshot (if any)
         if: failure()
         uses: actions/upload-artifact@v4.6.2
