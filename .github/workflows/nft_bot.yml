@@ -36,17 +36,39 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      # 4. Install Playwright's Chromium browser + OS deps
-      - name: Install Playwright browsers
+      # 4. Install system dependencies manually (Ubuntu 24.04 compatible)
+      #    playwright install-deps fails on Ubuntu 24.04 due to libasound2 rename
+      - name: Install system dependencies for Chromium
         run: |
-          playwright install chromium
-          playwright install-deps chromium
+          sudo apt-get update
+          sudo apt-get install -y \
+            libasound2t64 \
+            libatk-bridge2.0-0 \
+            libatk1.0-0 \
+            libcups2 \
+            libdbus-1-3 \
+            libdrm2 \
+            libgbm1 \
+            libgtk-3-0 \
+            libnspr4 \
+            libnss3 \
+            libx11-xcb1 \
+            libxcomposite1 \
+            libxdamage1 \
+            libxfixes3 \
+            libxkbcommon0 \
+            libxrandr2 \
+            xvfb
 
-      # 5. Ensure logs directory exists before bot runs
+      # 5. Install Playwright's Chromium browser only (no install-deps)
+      - name: Install Playwright Chromium browser
+        run: playwright install chromium
+
+      # 6. Ensure logs directory exists before bot runs
       - name: Create logs directory
         run: mkdir -p logs
 
-      # 6. Run the bot — credentials injected from GitHub Secrets
+      # 7. Run the bot — credentials injected from GitHub Secrets
       - name: Run NFT bot
         env:
           RARBTC_USERNAME:             ${{ secrets.RARBTC_USERNAME }}
@@ -54,7 +76,7 @@ jobs:
           RARBTC_RESERVATION_PASSWORD: ${{ secrets.RARBTC_RESERVATION_PASSWORD }}
         run: python bot.py
 
-      # 7. Upload logs as a downloadable artifact (kept 30 days)
+      # 8. Upload logs as a downloadable artifact (kept 30 days)
       - name: Upload run logs
         if: always()   # Upload even if the bot failed
         uses: actions/upload-artifact@v4.6.2
@@ -64,7 +86,7 @@ jobs:
           retention-days: 30
           if-no-files-found: warn   # Don't fail if logs dir is empty
 
-      # 8. Upload error screenshot if one was saved
+      # 9. Upload error screenshot if one was saved
       - name: Upload error screenshot (if any)
         if: failure()
         uses: actions/upload-artifact@v4.6.2
