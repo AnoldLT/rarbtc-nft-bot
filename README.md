@@ -1,24 +1,49 @@
-# rarbtc.com NFT Trading Bot
+# Rarzz NFT Trading Bot
 
-Fully automated, cloud-hosted NFT buy-and-sell bot for [rarbtc.com](https://rarbtc.com).  
-Runs daily at **08:00 UTC** via **GitHub Actions** — no local machine required.
+Fully automated, cloud-hosted NFT buy-and-sell bot for [rarbtc.com](https://rarbtc.com) (Rarzz NFT platform).  
+Runs daily at **07:00 SAST (05:00 UTC)** via **GitHub Actions** — no local machine required.
 
 ---
 
 ## What it does
 
-1. Logs into rarbtc.com using your credentials (stored as GitHub Secrets).
-2. Navigates to `/nft/reservation` and clicks **Reserve**.
-3. Enters the reservation password in the popup.
-4. Waits up to **3 minutes** for the order confirmation popup.
-5. Clicks **Sell NFT** and agrees to the offered sale value.
-6. Waits 2 minutes for the sale to process.
-7. Navigates to `/nft/my` and sells any listed NFTs.
-8. Repeats steps 2–7 a **second time** (platform limit: 2 cycles per 24 h).
-9. Logs every action, timestamp, success, and error to a log file.
+The bot runs 2 cycles per day (platform limit). Each cycle is fully automated:
 
-If any step fails after 3 retries, the run aborts and saves an error screenshot.  
-All logs and screenshots are available as downloadable GitHub Actions artifacts.
+### On every run:
+1. Logs into rarbtc.com (dismisses cookie popup, email login tab, promotional popup)
+2. Checks **reservations available today** on `/nft/reservation`
+3. Checks **amount available for reservation** before each reserve attempt
+4. Runs up to **2 cycles** of reserve → sell
+
+### Per cycle logic:
+
+| Reservations Available | Action |
+|---|---|
+| 2 | Sell any existing NFTs first → Reserve → Sell → wait 10 min |
+| 1 | Sell any existing NFTs first → Reserve → Sell → wait 10 min |
+| 0 | Skip reservation → check `/nft/my` → sell any available NFTs |
+
+### Balance check before every reservation:
+- If **Amount available ≥ 250 USDT** → reserve immediately
+- If **Amount available < 250 USDT** → go to `/nft/my` first
+  - NFTs found → sell them → wait 10 min → re-check → reserve
+  - No NFTs → wait 10 min → proceed to reserve anyway
+
+### Sell flow:
+1. Navigate to `/nft/my`
+2. Click **Sell NFT** button
+3. Confirm in the NFT Sale popup
+4. Click **I understand** on the success popup
+5. Wait **10 minutes** before next cycle
+
+### Session handling:
+- If session expires mid-run, bot automatically re-logs in and closes the promotional popup before continuing
+
+### On every run the bot logs:
+- All actions with timestamps
+- Reservation count and amount available
+- NFT counts found and sold
+- Any errors with full traceback + screenshot + page HTML for debugging
 
 ---
 
@@ -30,17 +55,17 @@ All logs and screenshots are available as downloadable GitHub Actions artifacts.
 | GitHub Actions | GitHub **Secrets** — encrypted, never visible in logs |
 | Bot script | Read from environment variables at runtime only |
 
-> **The `.env` file is never committed to GitHub. Your passwords never appear in any public place.**
+> **Your passwords never appear in any file committed to GitHub.**
 
 ---
 
 ## Setup — step by step
 
-### Step 1 — Fork / create the repository
+### Step 1 — Create the repository
 
-1. Go to [github.com](https://github.com) → **New repository**.
-2. Name it (e.g. `rarbtc-nft-bot`), set it to **Private** (recommended).
-3. Upload all files from this project into it, preserving the folder structure:
+1. Go to [github.com](https://github.com) → **New repository**
+2. Name it (e.g. `rarbtc-nft-bot`), set it to **Private** (recommended)
+3. Push all files preserving this structure:
 
 ```
 rarbtc-nft-bot/
@@ -54,84 +79,70 @@ rarbtc-nft-bot/
 └── README.md
 ```
 
-> ⚠️ Do **not** upload your `.env` file — only upload `.env.example`.
+> Do **not** commit your `.env` file — only `.env.example`.
 
 ---
 
-### Step 2 — Add your credentials as GitHub Secrets
+### Step 2 — Add credentials as GitHub Secrets
 
-1. In your repo, go to **Settings → Secrets and variables → Actions**.
-2. Click **New repository secret** for each of the three secrets below:
+Go to your repo → **Settings → Secrets and variables → Actions → New repository secret**:
 
 | Secret name | Value |
 |---|---|
-| `RARBTC_USERNAME` | Your rarbtc.com username or email |
-| `RARBTC_PASSWORD` | Your rarbtc.com password |
-| `RARBTC_RESERVATION_PASSWORD` | Your reservation popup password |
+| `RARBTC_USERNAME` | Your rarbtc.com login email |
+| `RARBTC_PASSWORD` | Your rarbtc.com login password |
+| `RARBTC_RESERVATION_PASSWORD` | Your fund/reservation PIN password |
 
 ---
 
 ### Step 3 — Verify the workflow is active
 
-1. Go to the **Actions** tab in your repo.
-2. You should see **"NFT Bot Daily Run"** listed.
-3. To test it immediately: click the workflow → **Run workflow** → **Run workflow**.
+1. Go to the **Actions** tab in your repo
+2. You should see **"NFT Bot Daily Run"** listed
+3. To test immediately: click the workflow → **Run workflow** → **Run workflow**
 
-The bot will install all dependencies automatically and run in the cloud.
+All dependencies (Python, Playwright, Chromium) install automatically on the GitHub runner.
 
 ---
 
 ### Step 4 — View logs after a run
 
-1. Go to **Actions** → click a completed run.
-2. Scroll to **Artifacts** at the bottom.
-3. Download **`bot-logs-<run-id>`** to see the full timestamped log.
-4. If the run failed, an **`error-screenshot-<run-id>`** artifact will also appear.
-
----
-
-## Local development (optional)
-
-If you want to test locally before pushing to GitHub:
-
-```bash
-# 1. Clone your repo
-git clone https://github.com/YOUR_USERNAME/rarbtc-nft-bot.git
-cd rarbtc-nft-bot
-
-# 2. Create a virtual environment
-python -m venv venv
-source venv/bin/activate   # Windows: venv\Scripts\activate
-
-# 3. Install dependencies
-pip install -r requirements.txt
-playwright install chromium
-playwright install-deps chromium
-
-# 4. Set up your credentials
-cp .env.example .env
-# Open .env and fill in your real values
-
-# 5. Run the bot
-python bot.py
-```
-
-Logs will appear in the `logs/` folder.
+1. Go to **Actions** → click a completed run
+2. Scroll to **Artifacts** at the bottom
+3. Download **`bot-logs-<run-id>`** — contains:
+   - Full timestamped `.log` file
+   - Error screenshot (`.png`) if the run failed
+   - Page HTML dump (`.html`) for selector debugging if needed
 
 ---
 
 ## Schedule
 
-The bot runs automatically every day at **08:00 UTC**.  
+Runs automatically every day at **07:00 SAST / 05:00 UTC**.
+
 To change the time, edit `.github/workflows/nft_bot.yml`:
 
 ```yaml
 on:
   schedule:
-    - cron: "0 8 * * *"   # ← change this (minute hour * * *)
+    - cron: "0 5 * * *"   # 05:00 UTC = 07:00 SAST
 ```
 
-[Cron expression reference](https://crontab.guru/)
+[Cron expression helper](https://crontab.guru/)
+
+---
+
+## Full daily run timeline (estimate)
+
+| Step | Duration |
+|---|---|
+| Login + popup close | ~30s |
+| Check reservations + balance | ~20s |
+| Reserve NFT (per cycle) | ~3 min |
+| Sell flow (per cycle) | ~1 min |
+| 10 min wait between cycles | 10 min |
+| Cycle 2 (same as above) | ~14 min |
+| **Total** | **~35–45 min** |
 
 ---
 
@@ -139,10 +150,11 @@ on:
 
 | Symptom | Likely cause | Fix |
 |---|---|---|
-| Login fails | Wrong credentials secret | Re-check GitHub Secrets spelling and values |
-| Reserve button not found | Site layout changed | Check error screenshot; update selector in `bot.py` |
-| Popup never appears | Slow server | Timeout is 3 min; if consistent, check your account balance/eligibility |
-| `playwright install` fails | OS dep issue | The workflow handles this automatically on GitHub Actions |
+| Login fails | Wrong credentials | Re-check GitHub Secrets |
+| Reservation button not found | Used all reservations today | Normal — bot skips to sell check |
+| Confirmation popup timeout | Slow server / order processing | Bot saves page HTML — share with developer |
+| Session expired mid-run | Platform timeout | Bot auto re-logs in |
+| Amount available < 250 USDT | NFT still processing | Bot sells existing NFTs and waits 10 min |
 
 ---
 
@@ -151,10 +163,10 @@ on:
 | File | Purpose |
 |---|---|
 | `bot.py` | Main automation script |
-| `requirements.txt` | Python dependencies |
+| `requirements.txt` | Python dependencies (Playwright, python-dotenv) |
 | `.env.example` | Credential template (safe to commit) |
 | `.gitignore` | Prevents `.env` and logs from being committed |
-| `.github/workflows/nft_bot.yml` | GitHub Actions schedule and runner config |
+| `.github/workflows/nft_bot.yml` | GitHub Actions daily schedule and runner config |
 
 ---
 
