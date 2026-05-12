@@ -172,7 +172,7 @@ class RarbtcBot:
         self.page.goto(RESERVATION_URL, wait_until="domcontentloaded")
         time.sleep(10)
 
-        # Close any promotional popup that may appear on this page too
+        # Close any promotional popup on this page
         try:
             close_btn = self.page.query_selector("div.notice-btn div:last-child")
             if close_btn and close_btn.is_visible():
@@ -182,50 +182,49 @@ class RarbtcBot:
         except Exception:
             pass
 
-        log.info("Clicking Reservation button ...")
-        # From screenshot: the button has text "Reservation" inside a blue button
-        self.page.click(
-            "button:has-text('Reservation'), .reservation-btn, "
-            "[class*='reservation'] button, button.el-button--primary",
-            timeout=20_000,
-        )
-        time.sleep(10)
-
-        log.info("Waiting for reservation password popup ...")
-        self.page.wait_for_selector(
-            "input[type='password'], input[placeholder*='assword'], input[placeholder*='password']",
-            timeout=20_000,
-        )
-        time.sleep(10)
-
-        log.info("Entering reservation password ...")
-        self.page.fill(
-            "input[type='password'], input[placeholder*='assword']",
-            RESERVATION_PASSWORD,
-        )
-        time.sleep(10)
-
-        # Submit the popup
+        # Also dismiss any tutorial overlay (Skip button)
         try:
-            self.page.click(
-                "button:has-text('Confirm'), button:has-text('OK'), button:has-text('Submit'), "
-                "button:has-text('Reservation'), button.el-button--primary",
-                timeout=10_000,
-            )
-            log.info("Clicked confirm button on password popup.")
+            skip_btn = self.page.query_selector("text='Skip'")
+            if skip_btn and skip_btn.is_visible():
+                skip_btn.click()
+                log.info("Dismissed tutorial overlay.")
+                time.sleep(5)
         except Exception:
-            self.page.keyboard.press("Enter")
-            log.info("Pressed Enter to submit reservation password.")
+            pass
+
+        log.info("Clicking Reservation button ...")
+        # Confirmed from HTML: <button class="one-bt">Reservation</button>
+        self.page.click("button.one-bt", timeout=20_000)
         time.sleep(10)
 
-        log.info("Waiting up to 3 min for order confirmation popup ...")
+        log.info("Waiting for Fund password popup ...")
+        # Confirmed from HTML: hidden text input with maxlength=6 inside div.pw
+        self.page.wait_for_selector("div.pw input[type='text']", timeout=20_000)
+        time.sleep(5)
+
+        log.info("Entering fund password ...")
+        # Click the visual PIN display first to focus the hidden input
+        try:
+            self.page.click("div.van-password-input", timeout=5_000)
+            time.sleep(2)
+        except Exception:
+            pass
+        # Type directly into the hidden input
+        self.page.fill("div.pw input[type='text']", RESERVATION_PASSWORD, timeout=10_000)
+        time.sleep(10)
+
+        log.info("Clicking Confirm button ...")
+        # Confirmed from HTML: button.van-button--primary > div > span.van-button__text "Confirm"
+        self.page.click("button.van-button--primary", timeout=10_000)
+        time.sleep(10)
+
+        log.info("Waiting up to 3 min for order confirmation ...")
         self.page.wait_for_selector(
-            "text='Sell', text='SELL', button:has-text('Sell'), "
-            "[class*='sell'], text='NFT On Sale'",
+            "text='Sell', text='SELL', button:has-text('Sell'), [class*='sell']",
             timeout=POPUP_TIMEOUT_MS,
         )
         time.sleep(10)
-        log.info("Order confirmation popup appeared.")
+        log.info("Order confirmation appeared.")
 
     # ── Sell after reservation ────────────────────────────────────────────────
 
