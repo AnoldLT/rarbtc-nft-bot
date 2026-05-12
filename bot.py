@@ -128,11 +128,20 @@ class RarbtcBot:
         log.info("Clicking Login button ...")
         self.page.click("div.bt.flex-center", timeout=10_000)
 
-        # Wait for navigation — site redirects to /home after login
-        time.sleep(10)
+        # Wait for URL to actually change away from /login (up to 20s)
+        log.info("Waiting for redirect away from login page ...")
+        try:
+            self.page.wait_for_url(
+                lambda url: "/login" not in url,
+                timeout=20_000
+            )
+        except Exception:
+            pass  # Fall through to manual check below
+
+        time.sleep(5)
         log.info("Post-login URL: %s", self.page.url)
 
-        # Success = landed on /home or any non-login page
+        # Success = landed anywhere other than /login
         if "/login" in self.page.url:
             raise RuntimeError("Login failed — credentials rejected. Verify GitHub Secrets.")
 
