@@ -92,127 +92,48 @@ class RarbtcBot:
     def login(self) -> None:
         log.info("Navigating to login page ...")
         self.page.goto(f"{BASE_URL}/login", wait_until="domcontentloaded")
+        time.sleep(3)
 
-        # Site is JS-rendered — wait up to 15s for ANY input to appear before proceeding
-        log.info("Waiting for login form to render ...")
+        # Step 1: Dismiss cookie consent popup if present
         try:
-            self.page.wait_for_selector("input", timeout=15_000)
-            log.info("Input field detected on page.")
-        except PlaywrightTimeoutError:
-            log.warning("No input fields found after 15s — page may not have loaded correctly.")
+            cookie_btn = self.page.query_selector("button.accept-btn")
+            if cookie_btn and cookie_btn.is_visible():
+                cookie_btn.click()
+                log.info("Dismissed cookie consent popup.")
+                time.sleep(1)
+        except Exception:
+            pass
 
-        time.sleep(2)  # Extra buffer for slow JS hydration
+        # Step 2: Click "Email login" tab to ensure email form is active
+        try:
+            email_tab = self.page.query_selector("#tab-0")
+            if email_tab and email_tab.is_visible():
+                email_tab.click()
+                log.info("Clicked Email login tab.")
+                time.sleep(1)
+        except Exception:
+            log.warning("Could not click Email login tab — proceeding anyway.")
 
-        # Log all inputs found on the page for debugging
-        inputs = self.page.query_selector_all("input")
-        log.info("Found %d input(s) on login page:", len(inputs))
-        for inp in inputs:
-            itype = inp.get_attribute("type") or ""
-            iname = inp.get_attribute("name") or ""
-            iid   = inp.get_attribute("id") or ""
-            iph   = inp.get_attribute("placeholder") or ""
-            icls  = inp.get_attribute("class") or ""
-            log.info("  input type=%r name=%r id=%r placeholder=%r class=%r", itype, iname, iid, iph, icls)
+        # Step 3: Fill email field (exact placeholder from live site HTML)
+        log.info("Filling email field ...")
+        self.page.fill("input[placeholder='Please enter your email']", USERNAME, timeout=15_000)
+        log.info("Email filled.")
 
-        # Try username field — broad ordered list of selectors
-        USERNAME_SELECTORS = [
-            "input[name='username']",
-            "input[name='email']",
-            "input[name='user']",
-            "input[name='login']",
-            "input[name='account']",
-            "input[type='email']",
-            "input[type='text']",
-            "input[id*='user']",
-            "input[id*='email']",
-            "input[id*='login']",
-            "input[placeholder*='user' i]",
-            "input[placeholder*='email' i]",
-            "input[placeholder*='account' i]",
-            "input[placeholder*='login' i]",
-        ]
+        # Step 4: Fill password field (exact placeholder from live site HTML)
+        log.info("Filling password field ...")
+        self.page.fill("input[placeholder='Password must be 8-20 characters or more']", PASSWORD, timeout=15_000)
+        log.info("Password filled.")
 
-        username_filled = False
-        for sel in USERNAME_SELECTORS:
-            try:
-                el = self.page.query_selector(sel)
-                if el and el.is_visible():
-                    el.fill(USERNAME)
-                    log.info("Filled username using selector: %s", sel)
-                    username_filled = True
-                    break
-            except Exception:
-                continue
+        # Step 5: Click the Login button (a <div class="bt flex-center"> on this site)
+        log.info("Clicking Login button ...")
+        self.page.click("div.bt.flex-center", timeout=10_000)
 
-        if not username_filled:
-            raise RuntimeError("Could not find username input field — check error_page HTML in artifacts for correct selector")
-
-        # Try password field
-        PASSWORD_SELECTORS = [
-            "input[type='password']",
-            "input[name='password']",
-            "input[name='pass']",
-            "input[name='pwd']",
-            "input[id*='pass']",
-            "input[id*='pwd']",
-            "input[placeholder*='pass' i]",
-            "input[placeholder*='pwd' i]",
-        ]
-
-        password_filled = False
-        for sel in PASSWORD_SELECTORS:
-            try:
-                el = self.page.query_selector(sel)
-                if el and el.is_visible():
-                    el.fill(PASSWORD)
-                    log.info("Filled password using selector: %s", sel)
-                    password_filled = True
-                    break
-            except Exception:
-                continue
-
-        if not password_filled:
-            raise RuntimeError("Could not find password input field — check error_page HTML in artifacts for correct selector")
-
-        # Submit the form
-        SUBMIT_SELECTORS = [
-            "button[type='submit']",
-            "input[type='submit']",
-            "button:has-text('Login')",
-            "button:has-text('Log In')",
-            "button:has-text('Sign In')",
-            "button:has-text('Sign in')",
-            "button:has-text('Submit')",
-            "a:has-text('Login')",
-            "[class*='login-btn']",
-            "[class*='login_btn']",
-            "[class*='btn-login']",
-            "[class*='submit']",
-        ]
-
-        submitted = False
-        for sel in SUBMIT_SELECTORS:
-            try:
-                el = self.page.query_selector(sel)
-                if el and el.is_visible():
-                    el.click()
-                    log.info("Submitted login using selector: %s", sel)
-                    submitted = True
-                    break
-            except Exception:
-                continue
-
-        if not submitted:
-            # Last resort: press Enter on the password field
-            log.warning("No submit button found — pressing Enter on password field")
-            self.page.keyboard.press("Enter")
-
-        # Wait for page to change after login
+        # Wait for navigation away from login page
         time.sleep(5)
         log.info("Post-login URL: %s", self.page.url)
 
-        if "/login" in self.page.url or "/signin" in self.page.url:
-            raise RuntimeError("Login failed — still on login page. Check credentials in GitHub Secrets.")
+        if "/login" in self.page.url:
+            raise RuntimeError("Login failed — still on login page. Verify credentials in GitHub Secrets.")
 
         log.info("Login successful.")
 
