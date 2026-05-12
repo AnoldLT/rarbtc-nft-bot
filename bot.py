@@ -128,50 +128,33 @@ class RarbtcBot:
         log.info("Clicking Login button ...")
         self.page.click("div.bt.flex-center", timeout=10_000)
 
-        # Wait for navigation — site may take time to redirect after login
-        time.sleep(8)
+        # Wait for navigation — site redirects to /home after login
+        time.sleep(10)
         log.info("Post-login URL: %s", self.page.url)
 
-        # Check for logged-in indicators rather than just URL
-        # The site shows "Asset management" and user avatar when logged in
-        logged_in = False
-
-        # Check 1: URL changed away from login
-        if "/login" not in self.page.url:
-            logged_in = True
-            log.info("Login confirmed via URL change.")
-
-        # Check 2: Look for logged-in UI elements even if URL still shows /login
-        if not logged_in:
-            try:
-                self.page.wait_for_selector(
-                    "text='Asset management', [class*='user-info'], [class*='avatar'], "
-                    "[class*='logIn'], text='Ar'",
-                    timeout=8_000
-                )
-                logged_in = True
-                log.info("Login confirmed via page element.")
-            except Exception:
-                pass
-
-        if not logged_in:
+        # Success = landed on /home or any non-login page
+        if "/login" in self.page.url:
             raise RuntimeError("Login failed — credentials rejected. Verify GitHub Secrets.")
 
-        log.info("Login successful.")
+        log.info("Login successful. Now on: %s", self.page.url)
 
-        # Step 6: Close post-login promotional popup if present
-        # Structure: div.notice-btn > div[Previous], div[Close]
-        time.sleep(10)
-        try:
-            close_btn = self.page.query_selector("div.notice-btn div:last-child")
-            if close_btn and close_btn.is_visible():
-                close_btn.click()
-                log.info("Closed post-login promotional popup.")
-                time.sleep(10)
-            else:
-                log.info("No post-login popup detected — continuing.")
-        except Exception as e:
-            log.warning("Could not close post-login popup: %s", e)
+        # Step 6: Close post-login promotional popup
+        # Structure confirmed: div.notice-btn > div[Previous] + div[Close]
+        time.sleep(5)
+        for attempt in range(3):
+            try:
+                close_btn = self.page.query_selector("div.notice-btn div:last-child")
+                if close_btn and close_btn.is_visible():
+                    close_btn.click()
+                    log.info("Closed post-login promotional popup (attempt %d).", attempt + 1)
+                    time.sleep(10)
+                    break
+                else:
+                    log.info("Popup not visible yet, waiting (attempt %d)...", attempt + 1)
+                    time.sleep(5)
+            except Exception as e:
+                log.warning("Popup close attempt %d failed: %s", attempt + 1, e)
+                time.sleep(5)
 
     # ── Reserve NFT ───────────────────────────────────────────────────────────
 
