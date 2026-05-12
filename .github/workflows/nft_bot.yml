@@ -1,0 +1,67 @@
+# ─────────────────────────────────────────────────────────────────
+#  GitHub Actions Workflow
+#  Runs the rarbtc.com NFT bot daily at 08:00 UTC.
+#  Credentials are stored as GitHub Secrets — never in code.
+# ─────────────────────────────────────────────────────────────────
+
+name: NFT Bot Daily Run
+
+on:
+  schedule:
+    - cron: "0 8 * * *"   # Every day at 08:00 UTC
+  workflow_dispatch:        # Also allows manual trigger from GitHub UI
+
+jobs:
+  run-bot:
+    name: Run rarbtc NFT Bot
+    runs-on: ubuntu-latest
+    timeout-minutes: 30     # Safety cap — full run should take ~15 min
+
+    steps:
+      # 1. Check out the repository
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 2. Set up Python
+      - name: Set up Python 3.11
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      # 3. Install Python dependencies
+      - name: Install Python dependencies
+        run: pip install -r requirements.txt
+
+      # 4. Install Playwright's Chromium browser + OS deps
+      - name: Install Playwright browsers
+        run: |
+          playwright install chromium
+          playwright install-deps chromium
+
+      # 5. Run the bot — credentials injected from GitHub Secrets
+      - name: Run NFT bot
+        env:
+          RARBTC_USERNAME:             ${{ secrets.RARBTC_USERNAME }}
+          RARBTC_PASSWORD:             ${{ secrets.RARBTC_PASSWORD }}
+          RARBTC_RESERVATION_PASSWORD: ${{ secrets.RARBTC_RESERVATION_PASSWORD }}
+        run: python bot.py
+
+      # 6. Upload logs as a downloadable artifact (kept 30 days)
+      - name: Upload run logs
+        if: always()   # Upload even if the bot failed
+        uses: actions/upload-artifact@v4
+        with:
+          name: bot-logs-${{ github.run_id }}
+          path: logs/
+          retention-days: 30
+
+      # 7. Upload error screenshot if one was saved
+      - name: Upload error screenshot (if any)
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: error-screenshot-${{ github.run_id }}
+          path: logs/*.png
+          retention-days: 30
+          if-no-files-found: ignore

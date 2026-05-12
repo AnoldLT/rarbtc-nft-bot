@@ -1,0 +1,21 @@
+# ── Credentials — NEVER commit these ──────────────────────────────
+.env
+
+# ── Runtime logs & screenshots ────────────────────────────────────
+logs/
+*.png
+
+# ── Python cache ──────────────────────────────────────────────────
+__pycache__/
+*.py[cod]
+*.pyo
+.pytest_cache/
+
+# ── Virtual environments ──────────────────────────────────────────
+venv/
+.venv/
+env/
+
+# ── OS files ──────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
