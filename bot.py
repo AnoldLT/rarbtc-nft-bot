@@ -90,28 +90,131 @@ class RarbtcBot:
     # ── Authentication ────────────────────────────────────────────────────────
 
     def login(self) -> None:
-        log.info("Navigating to login page …")
-        self.page.goto(f"{BASE_URL}/login", wait_until="networkidle")
+        log.info("Navigating to login page ...")
+        self.page.goto(f"{BASE_URL}/login", wait_until="domcontentloaded")
 
-        log.info("Filling credentials …")
-        # Adjust selectors if the site uses different field names
-        self.page.fill("input[name='username'], input[name='email'], input[type='email']", USERNAME)
-        self.page.fill("input[name='password'], input[type='password']", PASSWORD)
-        self.page.click("button[type='submit'], input[type='submit'], button:has-text('Login'), button:has-text('Sign in')")
-
-        # Confirm login succeeded by waiting for a post-login element
-        self.page.wait_for_url(f"{BASE_URL}/**", timeout=30_000)
-        # Extra guard: look for typical logged-in indicators
+        # Site is JS-rendered — wait up to 15s for ANY input to appear before proceeding
+        log.info("Waiting for login form to render ...")
         try:
-            self.page.wait_for_selector(
-                "a[href*='logout'], a[href*='dashboard'], .user-menu, .avatar, [class*='profile']",
-                timeout=15_000,
-            )
+            self.page.wait_for_selector("input", timeout=15_000)
+            log.info("Input field detected on page.")
         except PlaywrightTimeoutError:
-            # Some sites don't expose obvious logged-in markers; check we're not still on /login
-            if "/login" in self.page.url or "/signin" in self.page.url:
-                raise RuntimeError("Login failed — still on login page after submit.")
-        log.info("Login successful. Current URL: %s", self.page.url)
+            log.warning("No input fields found after 15s — page may not have loaded correctly.")
+
+        time.sleep(2)  # Extra buffer for slow JS hydration
+
+        # Log all inputs found on the page for debugging
+        inputs = self.page.query_selector_all("input")
+        log.info("Found %d input(s) on login page:", len(inputs))
+        for inp in inputs:
+            itype = inp.get_attribute("type") or ""
+            iname = inp.get_attribute("name") or ""
+            iid   = inp.get_attribute("id") or ""
+            iph   = inp.get_attribute("placeholder") or ""
+            icls  = inp.get_attribute("class") or ""
+            log.info("  input type=%r name=%r id=%r placeholder=%r class=%r", itype, iname, iid, iph, icls)
+
+        # Try username field — broad ordered list of selectors
+        USERNAME_SELECTORS = [
+            "input[name='username']",
+            "input[name='email']",
+            "input[name='user']",
+            "input[name='login']",
+            "input[name='account']",
+            "input[type='email']",
+            "input[type='text']",
+            "input[id*='user']",
+            "input[id*='email']",
+            "input[id*='login']",
+            "input[placeholder*='user' i]",
+            "input[placeholder*='email' i]",
+            "input[placeholder*='account' i]",
+            "input[placeholder*='login' i]",
+        ]
+
+        username_filled = False
+        for sel in USERNAME_SELECTORS:
+            try:
+                el = self.page.query_selector(sel)
+                if el and el.is_visible():
+                    el.fill(USERNAME)
+                    log.info("Filled username using selector: %s", sel)
+                    username_filled = True
+                    break
+            except Exception:
+                continue
+
+        if not username_filled:
+            raise RuntimeError("Could not find username input field — check error_page HTML in artifacts for correct selector")
+
+        # Try password field
+        PASSWORD_SELECTORS = [
+            "input[type='password']",
+            "input[name='password']",
+            "input[name='pass']",
+            "input[name='pwd']",
+            "input[id*='pass']",
+            "input[id*='pwd']",
+            "input[placeholder*='pass' i]",
+            "input[placeholder*='pwd' i]",
+        ]
+
+        password_filled = False
+        for sel in PASSWORD_SELECTORS:
+            try:
+                el = self.page.query_selector(sel)
+                if el and el.is_visible():
+                    el.fill(PASSWORD)
+                    log.info("Filled password using selector: %s", sel)
+                    password_filled = True
+                    break
+            except Exception:
+                continue
+
+        if not password_filled:
+            raise RuntimeError("Could not find password input field — check error_page HTML in artifacts for correct selector")
+
+        # Submit the form
+        SUBMIT_SELECTORS = [
+            "button[type='submit']",
+            "input[type='submit']",
+            "button:has-text('Login')",
+            "button:has-text('Log In')",
+            "button:has-text('Sign In')",
+            "button:has-text('Sign in')",
+            "button:has-text('Submit')",
+            "a:has-text('Login')",
+            "[class*='login-btn']",
+            "[class*='login_btn']",
+            "[class*='btn-login']",
+            "[class*='submit']",
+        ]
+
+        submitted = False
+        for sel in SUBMIT_SELECTORS:
+            try:
+                el = self.page.query_selector(sel)
+                if el and el.is_visible():
+                    el.click()
+                    log.info("Submitted login using selector: %s", sel)
+                    submitted = True
+                    break
+            except Exception:
+                continue
+
+        if not submitted:
+            # Last resort: press Enter on the password field
+            log.warning("No submit button found — pressing Enter on password field")
+            self.page.keyboard.press("Enter")
+
+        # Wait for page to change after login
+        time.sleep(5)
+        log.info("Post-login URL: %s", self.page.url)
+
+        if "/login" in self.page.url or "/signin" in self.page.url:
+            raise RuntimeError("Login failed — still on login page. Check credentials in GitHub Secrets.")
+
+        log.info("Login successful.")
 
     # ── Reserve NFT ───────────────────────────────────────────────────────────
 
