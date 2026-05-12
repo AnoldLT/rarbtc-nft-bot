@@ -254,27 +254,60 @@ class RarbtcBot:
     # ── Sell after reservation ────────────────────────────────────────────────
 
     def sell_from_popup(self) -> None:
-        # After clicking Sell NFT in the reservation success popup,
-        # the NFT Sale popup appears with price details and a Sell NFT button
-        log.info("Waiting for NFT Sale popup ...")
-        # Confirmed: button.van-button--primary with span.van-button__text "Sell NFT"
-        self.page.wait_for_selector(
-            "text='NFT Sale'",
-            timeout=20_000
-        )
-        time.sleep(5)
-        log.info("NFT Sale popup appeared — clicking Sell NFT ...")
-        self.page.click("button.van-button--primary", timeout=10_000)
+        # After clicking "Sell NFT" in the Reservation Successful popup,
+        # the site navigates to /nft/my where the NFT Sale popup appears
+        log.info("Navigating to My NFT page after reservation sell click ...")
+        self.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
         time.sleep(10)
 
-        # Success popup: "Selling application submitted successfully"
+        # Close promotional popup if present
+        try:
+            close_btn = self.page.query_selector("div.notice-btn div:last-child")
+            if close_btn and close_btn.is_visible():
+                close_btn.click()
+                log.info("Closed popup on My NFT page.")
+                time.sleep(10)
+        except Exception:
+            pass
+
+        # Check if NFT Sale popup appeared automatically after navigation
+        nft_sale_visible = False
+        try:
+            self.page.wait_for_selector("text='NFT Sale'", timeout=10_000)
+            nft_sale_visible = True
+            log.info("NFT Sale popup appeared automatically.")
+        except Exception:
+            log.info("NFT Sale popup not auto-shown — clicking Sell NFT button manually.")
+
+        if not nft_sale_visible:
+            # Find and click Sell NFT button on the page
+            sell_btn = self.page.query_selector("button[data-v-5055aed9]")
+            if not sell_btn:
+                sell_btn = self.page.query_selector("button:has-text('Sell NFT')")
+            if sell_btn and sell_btn.is_visible():
+                sell_btn.click()
+                log.info("Clicked Sell NFT button.")
+                time.sleep(10)
+                # Wait for NFT Sale popup
+                self.page.wait_for_selector("text='NFT Sale'", timeout=15_000)
+                log.info("NFT Sale popup appeared.")
+            else:
+                log.warning("No Sell NFT button found — NFT may already be listed.")
+                return
+
+        time.sleep(5)
+        # Click Sell NFT inside the popup
+        self.page.click("button.van-button--primary", timeout=10_000)
+        log.info("Clicked Sell NFT in sale popup.")
+        time.sleep(10)
+
+        # Success popup
         log.info("Waiting for sale confirmation ...")
         self.page.wait_for_selector(
             "text='Selling application submitted successfully'",
             timeout=20_000
         )
         log.info("Sale submitted successfully.")
-        # Popup may auto-close — don't fail if button already gone
         try:
             self.page.click("button.van-button--primary", timeout=5_000)
             log.info("Clicked I understand.")
