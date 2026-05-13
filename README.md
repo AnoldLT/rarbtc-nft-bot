@@ -336,15 +336,3 @@ python bot.py
 - See `SECURITY.md` for full security policy
 
 ---
-
-## Sharing the Repo
-
-### Option A — Others manage their own bot (recommended)
-1. Make repo **Public**
-2. Share the link
-3. Others **Fork** it → add their own secrets → enable Actions
-
-### Option B — You manage bot for others
-1. Keep repo **Private**
-2. Add them as **Collaborator** (Settings → Collaborators)
-3. They can trigger runs and view logs but cannot see your Secrets
