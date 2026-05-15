@@ -90,6 +90,9 @@ jobs:
           RARBTC_USERNAME_5:                ${{ secrets.RARBTC_USERNAME_5 }}
           RARBTC_PASSWORD_5:                ${{ secrets.RARBTC_PASSWORD_5 }}
           RARBTC_RESERVATION_PASSWORD_5:    ${{ secrets.RARBTC_RESERVATION_PASSWORD_5 }}
+          SENDGRID_API_KEY:                 ${{ secrets.SENDGRID_API_KEY }}
+          NOTIFY_EMAIL_TO:                  ${{ secrets.NOTIFY_EMAIL_TO }}
+          NOTIFY_EMAIL_FROM:                ${{ secrets.NOTIFY_EMAIL_FROM }}
         run: python bot.py
 
       # 8. Upload all account logs
