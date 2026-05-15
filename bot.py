@@ -83,7 +83,6 @@ def get_account_credentials(account_num: int):
         return None, missing
     return (username, password, res_pass), []
 
-
 def validate_env() -> None:
     """Warn if ACCOUNT_COUNT is not set. Individual account creds checked at runtime."""
     if ACCOUNT_COUNT < 1:
@@ -914,11 +913,47 @@ def run_account(account_num: int) -> dict:
 
             # ── Collect closing stats ──────────────────────────────────────
             try:
+                # Check reservations remaining
                 summary["reservations_end"] = bot.get_reservations_available()
+
+                # Navigate to /nft/my and confirm 0 NFTs before reading balance
+                acct_logger.info("Waiting for all NFT sales to settle before reading final balance ...")
                 bot.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
                 time.sleep(10)
-                summary["nfts_end"]     = bot._get_nft_total_number()
-                summary["balance_end"]  = bot.get_account_balance()
+                # Close popup if present
+                try:
+                    close_btn = bot.page.query_selector("div.notice-btn div:last-child")
+                    if close_btn and close_btn.is_visible():
+                        close_btn.click()
+                        time.sleep(5)
+                except Exception:
+                    pass
+
+                nfts_remaining = bot._get_nft_total_number()
+                summary["nfts_end"] = nfts_remaining
+
+                if nfts_remaining > 0:
+                    acct_logger.warning(
+                        "%d NFT(s) still listed — waiting 2 min for sales to settle ...",
+                        nfts_remaining
+                    )
+                    time.sleep(120)
+                    # Re-check after wait
+                    bot.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
+                    time.sleep(10)
+                    summary["nfts_end"] = bot._get_nft_total_number()
+                else:
+                    # Still wait 2 min even if 0 NFTs — funds may still be settling
+                    acct_logger.info("0 NFTs listed — waiting 2 min for funds to settle ...")
+                    time.sleep(120)
+
+                # Now read the final balance
+                summary["balance_end"] = bot.get_account_balance()
+                acct_logger.info(
+                    "Final balance: %.4f USDT (income: %.4f USDT)",
+                    summary["balance_end"],
+                    summary["balance_end"] - summary["balance_start"]
+                )
             except Exception as e:
                 acct_logger.warning("Could not collect closing stats: %s", e)
 
