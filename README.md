@@ -427,3 +427,26 @@ Account 4                               SKIPPED
 ─────────────────────────────────────────────
 Issue: Missing GitHub Secrets: RARBTC_USERNAME_4, RARBTC_PASSWORD_4
 ```
+
+### Daily report log file
+
+In addition to the email, each account also writes a **separate human-readable report log file** into the `logs/` artifact after every run:
+
+```
+logs/
+├── account_1_report_20260514.log
+├── account_2_report_20260514.log
+└── ...
+```
+
+The report log contains:
+- Reservations at login
+- NFTs available at login
+- Reservations remaining after run
+- NFTs unsold after run
+- **Day income** (no totals, no balances — income only)
+- Human-friendly failure reason if anything went wrong
+
+This file is designed to be a clean, simple daily summary — no raw numbers or debug info. One file per account per day.
+
+> **Note for fork users:** When the upstream repo is updated (new features, bug fixes), your fork does not update automatically. To get the latest version, go to your forked repo on GitHub and click **"Sync fork" → "Update branch"**. Your GitHub Secrets are never affected by syncing.

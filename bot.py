@@ -986,6 +986,33 @@ def run_account(account_num: int) -> dict:
                 account_num,
                 datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
             )
+
+            # Write separate human-readable daily report log for this account
+            try:
+                report_path = logs_dir / f"account_{account_num}_report_{datetime.utcnow().strftime('%Y%m%d')}.log"
+                income = summary.get("balance_end", 0.0) - summary.get("balance_start", 0.0)
+                income_str = f"+{income:.4f} USDT" if income >= 0 else f"{income:.4f} USDT"
+                lines = [
+                    "=" * 50,
+                    f"  ACCOUNT {account_num} — Daily Report",
+                    f"  Date: {datetime.utcnow().strftime('%Y-%m-%d')}",
+                    f"  Status: {summary.get('status', 'UNKNOWN')}",
+                    "=" * 50,
+                    f"  Reservations at login:          {summary.get('reservations_start', 'N/A')}",
+                    f"  NFTs available at login:        {summary.get('nfts_start', 'N/A')}",
+                    f"  Reservations after run:         {summary.get('reservations_end', 'N/A')}",
+                    f"  NFTs unsold after run:          {summary.get('nfts_end', 'N/A')}",
+                    f"  Day income:                     {income_str}",
+                ]
+                if summary.get("failure_reason"):
+                    lines.append("")
+                    lines.append(f"  Issue: {summary['failure_reason']}")
+                lines.append("=" * 50)
+                report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+                acct_logger.info("Daily report saved: %s", report_path)
+            except Exception as re:
+                acct_logger.warning("Could not write daily report: %s", re)
+
             acct_handler.close()
             acct_logger.removeHandler(acct_handler)
 
