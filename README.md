@@ -336,3 +336,94 @@ python bot.py
 - See `SECURITY.md` for full security policy
 
 ---
+
+## Sharing the Repo
+
+### Option A — Others manage their own bot (recommended)
+1. Make repo **Public**
+2. Share the link
+3. Others **Fork** it → add their own secrets → enable Actions
+
+### Option B — You manage bot for others
+1. Keep repo **Private**
+2. Add them as **Collaborator** (Settings → Collaborators)
+3. They can trigger runs and view logs but cannot see your Secrets
+
+---
+
+## Email Notifications (Daily Report)
+
+After all accounts complete their daily run, the bot sends a single email report via **SendGrid**.
+
+### What the email includes
+
+Per account:
+- Reservations available at login
+- NFTs available to sell at login
+- Account balance at login
+- Reservations remaining after run
+- NFTs unsold after run
+- Account balance after run
+- **Day income** (balance end − balance start)
+- Human-friendly failure reason (if the account failed or was skipped)
+
+Summary:
+- **Total day income** across all accounts
+
+### Setup
+
+**Step 1 — Create a SendGrid account**
+1. Go to [sendgrid.com](https://sendgrid.com) → sign up (free tier = 100 emails/day)
+2. Settings → API Keys → Create API Key → Full Access
+3. Copy the key — it only shows once
+4. Settings → Sender Authentication → Single Sender Verification → verify your sending email address
+
+**Step 2 — Add three GitHub Secrets**
+
+Go to repo → **Settings → Secrets and variables → Actions → New repository secret**:
+
+| Secret | Value |
+|---|---|
+| `SENDGRID_API_KEY` | Your SendGrid API key |
+| `NOTIFY_EMAIL_TO` | Email address to receive the daily report |
+| `NOTIFY_EMAIL_FROM` | Verified sender email (e.g. `rarbtcbot@gmail.com`) |
+
+**Email notifications are optional.** If these secrets are not set, the bot logs a note and continues running normally — it will not fail.
+
+### Email report format
+
+```
+Rarzz NFT Bot — Daily Report
+2026-05-14 | 08:05 UTC
+
+Account 1                               SUCCESS
+─────────────────────────────────────────────
+Reservations at login              2
+NFTs available at login            0
+Balance at login                   325.9100 USDT
+Reservations remaining after run   0
+NFTs unsold after run              0
+Balance after run                  330.1500 USDT
+Day income                         +4.2400 USDT
+
+Account 2                               SUCCESS
+─────────────────────────────────────────────
+...
+
+Total Day Income across all accounts:  +8.4800 USDT
+```
+
+If an account fails:
+```
+Account 3                               FAILED
+─────────────────────────────────────────────
+...
+Issue: Reservation was placed but no confirmation appeared within 3 minutes.
+```
+
+If secrets are missing for an account:
+```
+Account 4                               SKIPPED
+─────────────────────────────────────────────
+Issue: Missing GitHub Secrets: RARBTC_USERNAME_4, RARBTC_PASSWORD_4
+```
