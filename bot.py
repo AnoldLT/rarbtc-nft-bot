@@ -13,12 +13,26 @@ from pathlib import Path
 from dotenv import load_dotenv
 from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeoutError
 
+# SendGrid email notifications (optional — bot continues if not configured)
+try:
+    from sendgrid import SendGridAPIClient
+    from sendgrid.helpers.mail import Mail
+    SENDGRID_AVAILABLE = True
+except ImportError:
+    SENDGRID_AVAILABLE = False
+
 # ── Load environment variables ────────────────────────────────────────────────
 load_dotenv()
 
 # Multi-account support — credentials loaded per account at runtime
 # ACCOUNT_COUNT is a GitHub Actions variable (not secret)
 ACCOUNT_COUNT = int(os.environ.get("ACCOUNT_COUNT", "1"))
+
+# ── Email notification config (optional) ──────────────────────────────────────
+SENDGRID_API_KEY  = os.environ.get("SENDGRID_API_KEY", "")
+NOTIFY_EMAIL_TO   = os.environ.get("NOTIFY_EMAIL_TO", "")
+NOTIFY_EMAIL_FROM = os.environ.get("NOTIFY_EMAIL_FROM", "")
+EMAIL_ENABLED     = bool(SENDGRID_API_KEY and NOTIFY_EMAIL_TO and NOTIFY_EMAIL_FROM)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 BASE_URL         = "https://rarbtc.com"
@@ -516,6 +530,36 @@ class RarbtcBot:
         else:
             self.log.warning("%d NFT(s) still present after wait — proceeding anyway.", nfts)
 
+    def get_account_balance(self) -> float:
+        """Read account balance from the reservation page."""
+        try:
+            if "nft/reservation" not in self.page.url:
+                self.page.goto(RESERVATION_URL, wait_until="domcontentloaded")
+                time.sleep(10)
+                try:
+                    close_btn = self.page.query_selector("div.notice-btn div:last-child")
+                    if close_btn and close_btn.is_visible():
+                        close_btn.click()
+                        time.sleep(5)
+                except Exception:
+                    pass
+            li_els = self.page.query_selector_all("li")
+            for li in li_els:
+                try:
+                    li_text = li.inner_text()
+                    if "Account balance" in li_text:
+                        val_el = li.query_selector("div.val")
+                        if val_el:
+                            txt = val_el.inner_text().strip().replace("USDT", "").strip()
+                            balance = float(txt)
+                            self.log.info("Account balance: %.2f USDT", balance)
+                            return balance
+                except Exception:
+                    continue
+        except Exception as e:
+            self.log.warning("Could not read account balance: %s", e)
+        return 0.0
+
     def get_nfts_available(self) -> int:
         """Navigate to My NFT page and return total NFT count."""
         self.log.info("Checking NFTs available on My NFT page ...")
@@ -658,28 +702,157 @@ class RarbtcBot:
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 
-def run_account(account_num: int) -> bool:
+def send_run_notification(all_account_summaries: list) -> None:
+    """
+    Send a single email after all accounts have been processed.
+    Silently skips if email is not configured.
+    """
+    if not EMAIL_ENABLED:
+        log.info("Email notifications not configured — skipping. "
+                 "Set SENDGRID_API_KEY, NOTIFY_EMAIL_TO, NOTIFY_EMAIL_FROM to enable.")
+        return
+
+    if not SENDGRID_AVAILABLE:
+        log.warning("SendGrid library not installed — cannot send notification.")
+        return
+
+    run_date = datetime.utcnow().strftime("%Y-%m-%d")
+    run_time = datetime.utcnow().strftime("%H:%M UTC")
+
+    # Build HTML email body
+    account_rows = ""
+    for s in all_account_summaries:
+        status_color = "#27ae60" if s["status"] == "SUCCESS" else "#e74c3c"
+        status_label = s["status"]
+
+        # Income calculation
+        income = s.get("balance_end", 0) - s.get("balance_start", 0)
+        income_str = f"+{income:.4f} USDT" if income >= 0 else f"{income:.4f} USDT"
+        income_color = "#27ae60" if income >= 0 else "#e74c3c"
+
+        # Failure reason
+        failure_row = ""
+        if s["status"] != "SUCCESS" and s.get("failure_reason"):
+            failure_row = f"""
+            <tr>
+                <td colspan="2" style="padding:8px 12px; background:#fff3cd; color:#856404; border-radius:4px;">
+                    <strong>Issue:</strong> {s["failure_reason"]}
+                </td>
+            </tr>"""
+
+        account_rows += f"""
+        <div style="margin-bottom:24px; border:1px solid #e0e0e0; border-radius:8px; overflow:hidden;">
+            <div style="background:#2c3e50; color:white; padding:12px 16px; display:flex; justify-content:space-between;">
+                <strong>Account {s["account_num"]}</strong>
+                <span style="background:{status_color}; padding:2px 10px; border-radius:12px; font-size:13px;">{status_label}</span>
+            </div>
+            <table style="width:100%; border-collapse:collapse; font-size:14px;">
+                <tr style="background:#f8f9fa;">
+                    <td style="padding:8px 12px; color:#666; width:60%;">Reservations at login</td>
+                    <td style="padding:8px 12px; font-weight:bold;">{s.get("reservations_start", "N/A")}</td>
+                </tr>
+                <tr>
+                    <td style="padding:8px 12px; color:#666;">NFTs available at login</td>
+                    <td style="padding:8px 12px; font-weight:bold;">{s.get("nfts_start", "N/A")}</td>
+                </tr>
+                <tr style="background:#f8f9fa;">
+                    <td style="padding:8px 12px; color:#666;">Balance at login</td>
+                    <td style="padding:8px 12px; font-weight:bold;">{s.get("balance_start", 0):.4f} USDT</td>
+                </tr>
+                <tr>
+                    <td style="padding:8px 12px; color:#666;">Reservations remaining after run</td>
+                    <td style="padding:8px 12px; font-weight:bold;">{s.get("reservations_end", "N/A")}</td>
+                </tr>
+                <tr style="background:#f8f9fa;">
+                    <td style="padding:8px 12px; color:#666;">NFTs unsold after run</td>
+                    <td style="padding:8px 12px; font-weight:bold;">{s.get("nfts_end", "N/A")}</td>
+                </tr>
+                <tr>
+                    <td style="padding:8px 12px; color:#666;">Balance after run</td>
+                    <td style="padding:8px 12px; font-weight:bold;">{s.get("balance_end", 0):.4f} USDT</td>
+                </tr>
+                <tr style="background:#f8f9fa;">
+                    <td style="padding:8px 12px; color:#666;"><strong>Day income</strong></td>
+                    <td style="padding:8px 12px; font-weight:bold; color:{income_color};">{income_str}</td>
+                </tr>
+                {failure_row}
+            </table>
+        </div>"""
+
+    total_income = sum(
+        s.get("balance_end", 0) - s.get("balance_start", 0)
+        for s in all_account_summaries
+    )
+    total_color = "#27ae60" if total_income >= 0 else "#e74c3c"
+    total_str = f"+{total_income:.4f} USDT" if total_income >= 0 else f"{total_income:.4f} USDT"
+
+    html_body = f"""
+    <div style="font-family:Arial,sans-serif; max-width:600px; margin:0 auto; color:#333;">
+        <div style="background:#2c3e50; color:white; padding:20px; border-radius:8px 8px 0 0; text-align:center;">
+            <h2 style="margin:0;">Rarzz NFT Bot — Daily Report</h2>
+            <p style="margin:6px 0 0; opacity:0.8;">{run_date} &nbsp;|&nbsp; {run_time}</p>
+        </div>
+
+        <div style="padding:20px; background:#fff; border:1px solid #e0e0e0; border-top:none;">
+            {account_rows}
+
+            <div style="background:#2c3e50; color:white; padding:14px 16px; border-radius:8px; text-align:center; margin-top:8px;">
+                <span style="font-size:15px;">Total Day Income across all accounts: </span>
+                <strong style="font-size:18px; color:{total_color};">{total_str}</strong>
+            </div>
+        </div>
+
+        <div style="padding:12px; text-align:center; color:#999; font-size:12px;">
+            Sent by Rarzz NFT Bot &nbsp;|&nbsp; Logs available in GitHub Actions artifacts
+        </div>
+    </div>
+    """
+
+    try:
+        message = Mail(
+            from_email=NOTIFY_EMAIL_FROM,
+            to_emails=NOTIFY_EMAIL_TO,
+            subject=f"Rarzz NFT Bot — Daily Report {run_date}",
+            html_content=html_body,
+        )
+        sg = SendGridAPIClient(SENDGRID_API_KEY)
+        response = sg.send(message)
+        log.info("Email notification sent. Status: %d", response.status_code)
+    except Exception as e:
+        log.warning("Failed to send email notification: %s", e)
+
+
+def run_account(account_num: int) -> dict:
     """
     Run the full bot flow for a single account.
-    Returns True on success, False on failure.
-    Sets up its own log file, browser context, and credentials.
+    Returns a summary dict with stats and status for email notification.
     """
+    summary = {
+        "account_num":        account_num,
+        "status":             "SKIPPED",
+        "failure_reason":     None,
+        "reservations_start": "N/A",
+        "nfts_start":         "N/A",
+        "balance_start":      0.0,
+        "reservations_end":   "N/A",
+        "nfts_end":           "N/A",
+        "balance_end":        0.0,
+    }
+
     # Load credentials for this account
     creds, missing = get_account_credentials(account_num)
     if creds is None:
         acct_log = logging.getLogger(f"rarbtc-bot-acct{account_num}")
-        acct_log.warning(
-            "Account %d SKIPPED — missing secrets: %s",
-            account_num, ", ".join(missing)
-        )
-        # Write skip record to account-specific log file
+        reason = f"Missing GitHub Secrets: {', '.join(missing)}"
+        acct_log.warning("Account %d SKIPPED — %s", account_num, reason)
+        summary["failure_reason"] = reason
         skip_log = logs_dir / f"account_{account_num}_SKIPPED_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.log"
         skip_log.write_text(
             f"Account {account_num} skipped at {datetime.utcnow()} UTC\n"
-            f"Reason: Missing GitHub Secrets: {', '.join(missing)}\n",
+            f"Reason: {reason}\n",
             encoding="utf-8"
         )
-        return False
+        return summary
 
     username, password, reservation_password = creds
 
@@ -725,13 +898,66 @@ def run_account(account_num: int) -> bool:
         try:
             retry(bot.login, label="Login")
 
+            # ── Collect opening stats ──────────────────────────────────────
+            try:
+                summary["balance_start"]      = bot.get_account_balance()
+                summary["reservations_start"] = bot.get_reservations_available()
+                summary["nfts_start"]         = bot._get_nft_total_number()
+                # navigate back to reservation page for balance read
+                bot.page.goto(RESERVATION_URL, wait_until="domcontentloaded")
+                time.sleep(5)
+            except Exception as e:
+                acct_logger.warning("Could not collect opening stats: %s", e)
+
             for cycle in range(1, MAX_CYCLES + 1):
                 bot.run_cycle(cycle)
 
+            # ── Collect closing stats ──────────────────────────────────────
+            try:
+                summary["reservations_end"] = bot.get_reservations_available()
+                bot.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
+                time.sleep(10)
+                summary["nfts_end"]     = bot._get_nft_total_number()
+                summary["balance_end"]  = bot.get_account_balance()
+            except Exception as e:
+                acct_logger.warning("Could not collect closing stats: %s", e)
+
+            summary["status"] = "SUCCESS"
             acct_logger.info("Account %d — All %d cycles completed successfully.", account_num, MAX_CYCLES)
-            return True
+            return summary
 
         except Exception as exc:
+            # Human-friendly failure reason
+            err_str = str(exc)
+            if "Timeout" in err_str and "login" in err_str.lower():
+                reason = "Could not log in — check credentials in GitHub Secrets."
+            elif "Timeout" in err_str and "Reservation Successful" in err_str:
+                reason = "Reservation was placed but no confirmation appeared within 3 minutes."
+            elif "Timeout" in err_str and "NFT Sale" in err_str:
+                reason = "NFT was reserved but the sale popup did not appear."
+            elif "Timeout" in err_str and "one-bt" in err_str:
+                reason = "Reservation button not found — reservations may already be used up today."
+            elif "credentials rejected" in err_str:
+                reason = "Login failed — username or password is incorrect."
+            elif "Missing GitHub Secrets" in err_str:
+                reason = err_str
+            else:
+                reason = f"Unexpected error: {err_str[:200]}"
+
+            summary["status"]         = "FAILED"
+            summary["failure_reason"] = reason
+
+            # Try to collect whatever stats we have
+            try:
+                if summary["balance_end"] == 0.0:
+                    summary["balance_end"] = bot.get_account_balance()
+                if summary["nfts_end"] == "N/A":
+                    bot.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
+                    time.sleep(5)
+                    summary["nfts_end"] = bot._get_nft_total_number()
+            except Exception:
+                pass
+
             acct_logger.error("Account %d — FATAL ERROR: %s", account_num, exc, exc_info=True)
             ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
             try:
@@ -750,7 +976,7 @@ def run_account(account_num: int) -> bool:
                 acct_logger.info("Page HTML: %s", html_path)
             except Exception:
                 pass
-            return False
+            return summary
 
         finally:
             context.close()
@@ -771,18 +997,30 @@ def main() -> None:
     log.info("╚══════════════════════════════════════╝")
     log.info("Running %d account(s) sequentially.", ACCOUNT_COUNT)
 
-    results = {}
-    for account_num in range(1, ACCOUNT_COUNT + 1):
-        log.info("─" * 50)
-        log.info("Starting Account %d of %d ...", account_num, ACCOUNT_COUNT)
-        success = run_account(account_num)
-        results[account_num] = "SUCCESS" if success else "FAILED/SKIPPED"
-        log.info("Account %d result: %s", account_num, results[account_num])
+    if not EMAIL_ENABLED:
+        log.info("Email notifications disabled — SENDGRID_API_KEY / NOTIFY_EMAIL_TO / "
+                 "NOTIFY_EMAIL_FROM not set. Add these as GitHub Secrets to enable.")
 
-    log.info("─" * 50)
+    all_summaries = []
+    for account_num in range(1, ACCOUNT_COUNT + 1):
+        log.info("-" * 50)
+        log.info("Starting Account %d of %d ...", account_num, ACCOUNT_COUNT)
+        summary = run_account(account_num)
+        all_summaries.append(summary)
+        log.info("Account %d result: %s", account_num, summary["status"])
+
+    log.info("-" * 50)
     log.info("All accounts processed. Summary:")
-    for acct, result in results.items():
-        log.info("  Account %d: %s", acct, result)
+    for s in all_summaries:
+        log.info(
+            "  Account %d: %s | Balance start: %.4f → end: %.4f USDT | Income: %.4f USDT",
+            s["account_num"], s["status"],
+            s.get("balance_start", 0), s.get("balance_end", 0),
+            s.get("balance_end", 0) - s.get("balance_start", 0)
+        )
+
+    # Send email notification after all accounts are done
+    send_run_notification(all_summaries)
     log.info("Run finished at %s UTC.", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
 
 
