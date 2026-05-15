@@ -386,7 +386,7 @@ Go to repo → **Settings → Secrets and variables → Actions → New reposito
 |---|---|
 | `SENDGRID_API_KEY` | Your SendGrid API key |
 | `NOTIFY_EMAIL_TO` | Email address to receive the daily report |
-| `NOTIFY_EMAIL_FROM` | Verified sender email (e.g. `rarbtcbot@gmail.com`) |
+| `NOTIFY_EMAIL_FROM` | Verified sender email (e.g. `rarbtcbot@domain.com`) |
 
 **Email notifications are optional.** If these secrets are not set, the bot logs a note and continues running normally — it will not fail.
 
