@@ -83,6 +83,7 @@ def get_account_credentials(account_num: int):
         return None, missing
     return (username, password, res_pass), []
 
+
 def validate_env() -> None:
     """Warn if ACCOUNT_COUNT is not set. Individual account creds checked at runtime."""
     if ACCOUNT_COUNT < 1:
@@ -529,6 +530,42 @@ class RarbtcBot:
         else:
             self.log.warning("%d NFT(s) still present after wait — proceeding anyway.", nfts)
 
+    def get_today_reservation_income(self) -> str:
+        """
+        Navigate to /person/myIncome and read Today's personal reservation income.
+        Returns the value as a string e.g. "$4.4728" or "N/A" if unreadable.
+        Confirmed selector: div.info containing div.text "Today's personal reservation income"
+        and sibling div.num holding the value.
+        """
+        try:
+            self.page.goto(f"{BASE_URL}/person/myIncome", wait_until="domcontentloaded")
+            time.sleep(10)
+            # Close popup if present
+            try:
+                close_btn = self.page.query_selector("div.notice-btn div:last-child")
+                if close_btn and close_btn.is_visible():
+                    close_btn.click()
+                    time.sleep(5)
+            except Exception:
+                pass
+            # Find all div.info elements and look for the reservation income one
+            info_els = self.page.query_selector_all("div.info")
+            for el in info_els:
+                try:
+                    text_el = el.query_selector("div.text")
+                    num_el  = el.query_selector("div.num")
+                    if text_el and num_el:
+                        label = text_el.inner_text().strip()
+                        if "personal reservation income" in label.lower():
+                            value = num_el.inner_text().strip()
+                            self.log.info("Today's personal reservation income: %s", value)
+                            return value
+                except Exception:
+                    continue
+        except Exception as e:
+            self.log.warning("Could not read today's reservation income: %s", e)
+        return "N/A"
+
     def get_account_balance(self) -> float:
         """Read account balance from the reservation page."""
         try:
@@ -724,14 +761,11 @@ def send_run_notification(all_account_summaries: list) -> None:
         status_color = "#27ae60" if s["status"] == "SUCCESS" else "#e74c3c"
         status_label = s["status"]
 
-        # Income calculation
-        income = s.get("balance_end", 0) - s.get("balance_start", 0)
-        income_str = f"+{income:.4f} USDT" if income >= 0 else f"{income:.4f} USDT"
-        income_color = "#27ae60" if income >= 0 else "#e74c3c"
+        day_income = s.get("day_income", "N/A")
+        income_color = "#27ae60" if day_income != "N/A" and not day_income.startswith("-") else "#e74c3c"
 
-        # Failure reason
         failure_row = ""
-        if s["status"] != "SUCCESS" and s.get("failure_reason"):
+        if s.get("failure_reason"):
             failure_row = f"""
             <tr>
                 <td colspan="2" style="padding:8px 12px; background:#fff3cd; color:#856404; border-radius:4px;">
@@ -755,35 +789,22 @@ def send_run_notification(all_account_summaries: list) -> None:
                     <td style="padding:8px 12px; font-weight:bold;">{s.get("nfts_start", "N/A")}</td>
                 </tr>
                 <tr style="background:#f8f9fa;">
-                    <td style="padding:8px 12px; color:#666;">Balance at login</td>
-                    <td style="padding:8px 12px; font-weight:bold;">{s.get("balance_start", 0):.4f} USDT</td>
-                </tr>
-                <tr>
                     <td style="padding:8px 12px; color:#666;">Reservations remaining after run</td>
                     <td style="padding:8px 12px; font-weight:bold;">{s.get("reservations_end", "N/A")}</td>
                 </tr>
-                <tr style="background:#f8f9fa;">
+                <tr>
                     <td style="padding:8px 12px; color:#666;">NFTs unsold after run</td>
                     <td style="padding:8px 12px; font-weight:bold;">{s.get("nfts_end", "N/A")}</td>
                 </tr>
-                <tr>
-                    <td style="padding:8px 12px; color:#666;">Balance after run</td>
-                    <td style="padding:8px 12px; font-weight:bold;">{s.get("balance_end", 0):.4f} USDT</td>
-                </tr>
                 <tr style="background:#f8f9fa;">
                     <td style="padding:8px 12px; color:#666;"><strong>Day income</strong></td>
-                    <td style="padding:8px 12px; font-weight:bold; color:{income_color};">{income_str}</td>
+                    <td style="padding:8px 12px; font-weight:bold; color:{income_color};">{day_income}</td>
                 </tr>
                 {failure_row}
             </table>
         </div>"""
 
-    total_income = sum(
-        s.get("balance_end", 0) - s.get("balance_start", 0)
-        for s in all_account_summaries
-    )
-    total_color = "#27ae60" if total_income >= 0 else "#e74c3c"
-    total_str = f"+{total_income:.4f} USDT" if total_income >= 0 else f"{total_income:.4f} USDT"
+    # No total across accounts — each account's income is independent
 
     html_body = f"""
     <div style="font-family:Arial,sans-serif; max-width:600px; margin:0 auto; color:#333;">
@@ -795,10 +816,7 @@ def send_run_notification(all_account_summaries: list) -> None:
         <div style="padding:20px; background:#fff; border:1px solid #e0e0e0; border-top:none;">
             {account_rows}
 
-            <div style="background:#2c3e50; color:white; padding:14px 16px; border-radius:8px; text-align:center; margin-top:8px;">
-                <span style="font-size:15px;">Total Day Income across all accounts: </span>
-                <strong style="font-size:18px; color:{total_color};">{total_str}</strong>
-            </div>
+
         </div>
 
         <div style="padding:12px; text-align:center; color:#999; font-size:12px;">
@@ -832,10 +850,9 @@ def run_account(account_num: int) -> dict:
         "failure_reason":     None,
         "reservations_start": "N/A",
         "nfts_start":         "N/A",
-        "balance_start":      0.0,
         "reservations_end":   "N/A",
         "nfts_end":           "N/A",
-        "balance_end":        0.0,
+        "day_income":         "N/A",
     }
 
     # Load credentials for this account
@@ -899,12 +916,10 @@ def run_account(account_num: int) -> dict:
 
             # ── Collect opening stats ──────────────────────────────────────
             try:
-                summary["balance_start"]      = bot.get_account_balance()
                 summary["reservations_start"] = bot.get_reservations_available()
-                summary["nfts_start"]         = bot._get_nft_total_number()
-                # navigate back to reservation page for balance read
-                bot.page.goto(RESERVATION_URL, wait_until="domcontentloaded")
-                time.sleep(5)
+                bot.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
+                time.sleep(10)
+                summary["nfts_start"] = bot._get_nft_total_number()
             except Exception as e:
                 acct_logger.warning("Could not collect opening stats: %s", e)
 
@@ -916,11 +931,9 @@ def run_account(account_num: int) -> dict:
                 # Check reservations remaining
                 summary["reservations_end"] = bot.get_reservations_available()
 
-                # Navigate to /nft/my and confirm 0 NFTs before reading balance
-                acct_logger.info("Waiting for all NFT sales to settle before reading final balance ...")
+                # Check NFTs remaining on /nft/my
                 bot.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
                 time.sleep(10)
-                # Close popup if present
                 try:
                     close_btn = bot.page.query_selector("div.notice-btn div:last-child")
                     if close_btn and close_btn.is_visible():
@@ -938,22 +951,17 @@ def run_account(account_num: int) -> dict:
                         nfts_remaining
                     )
                     time.sleep(120)
-                    # Re-check after wait
                     bot.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
                     time.sleep(10)
                     summary["nfts_end"] = bot._get_nft_total_number()
                 else:
-                    # Still wait 2 min even if 0 NFTs — funds may still be settling
                     acct_logger.info("0 NFTs listed — waiting 2 min for funds to settle ...")
                     time.sleep(120)
 
-                # Now read the final balance
-                summary["balance_end"] = bot.get_account_balance()
-                acct_logger.info(
-                    "Final balance: %.4f USDT (income: %.4f USDT)",
-                    summary["balance_end"],
-                    summary["balance_end"] - summary["balance_start"]
-                )
+                # Read today's reservation income from /person/myIncome
+                summary["day_income"] = bot.get_today_reservation_income()
+                acct_logger.info("Today's reservation income: %s", summary["day_income"])
+
             except Exception as e:
                 acct_logger.warning("Could not collect closing stats: %s", e)
 
@@ -982,14 +990,14 @@ def run_account(account_num: int) -> dict:
             summary["status"]         = "FAILED"
             summary["failure_reason"] = reason
 
-            # Try to collect whatever stats we have
+            # Try to collect whatever stats we have at point of failure
             try:
-                if summary["balance_end"] == 0.0:
-                    summary["balance_end"] = bot.get_account_balance()
                 if summary["nfts_end"] == "N/A":
                     bot.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
                     time.sleep(5)
                     summary["nfts_end"] = bot._get_nft_total_number()
+                if summary["day_income"] == "N/A":
+                    summary["day_income"] = bot.get_today_reservation_income()
             except Exception:
                 pass
 
@@ -1025,8 +1033,6 @@ def run_account(account_num: int) -> dict:
             # Write separate human-readable daily report log for this account
             try:
                 report_path = logs_dir / f"account_{account_num}_report_{datetime.utcnow().strftime('%Y%m%d')}.log"
-                income = summary.get("balance_end", 0.0) - summary.get("balance_start", 0.0)
-                income_str = f"+{income:.4f} USDT" if income >= 0 else f"{income:.4f} USDT"
                 lines = [
                     "=" * 50,
                     f"  ACCOUNT {account_num} — Daily Report",
@@ -1037,7 +1043,7 @@ def run_account(account_num: int) -> dict:
                     f"  NFTs available at login:        {summary.get('nfts_start', 'N/A')}",
                     f"  Reservations after run:         {summary.get('reservations_end', 'N/A')}",
                     f"  NFTs unsold after run:          {summary.get('nfts_end', 'N/A')}",
-                    f"  Day income:                     {income_str}",
+                    f"  Day income:                     {summary.get('day_income', 'N/A')}",
                 ]
                 if summary.get("failure_reason"):
                     lines.append("")
@@ -1075,10 +1081,8 @@ def main() -> None:
     log.info("All accounts processed. Summary:")
     for s in all_summaries:
         log.info(
-            "  Account %d: %s | Balance start: %.4f → end: %.4f USDT | Income: %.4f USDT",
-            s["account_num"], s["status"],
-            s.get("balance_start", 0), s.get("balance_end", 0),
-            s.get("balance_end", 0) - s.get("balance_start", 0)
+            "  Account %d: %s | Day income: %s",
+            s["account_num"], s["status"], s.get("day_income", "N/A")
         )
 
     # Send email notification after all accounts are done
