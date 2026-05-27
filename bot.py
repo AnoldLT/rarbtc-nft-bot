@@ -1,7 +1,7 @@
 """
 rarbtc.com NFT Trading Automation Bot
 Performs up to 2 buy-sell cycles per day, fully headless via Playwright.
-Credentials are loaded from environment variables — never hardcoded.
+Credentials are loaded from environment variables — never hardcoded..
 """
 
 import os

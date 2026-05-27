@@ -9,7 +9,7 @@ name: NFT Bot Daily Run (Dual Account)
 
 on:
   schedule:
-    - cron: "23 3 * * *"   # Every day at 03:23 UTC (05:23 SAST / UTC+2)
+    - cron: "23 3 * * *"   # Every day at 03:23 UTC ( 05:23 SAST / UTC+2 )
   workflow_dispatch:        # Also allows manual trigger from GitHub UI
 
 env:
