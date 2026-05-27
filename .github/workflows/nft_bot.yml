@@ -1,25 +1,26 @@
 # ─────────────────────────────────────────────────────────────────
 #  GitHub Actions Workflow
-#  Runs the rarbtc.com NFT bot daily for two accounts sequentially.
+#  Runs the rarbtc.com NFT bot daily for N accounts sequentially.
+#  ACCOUNT_COUNT is a GitHub Actions Variable (not a Secret).
 #  Credentials are stored as GitHub Secrets — never in code.
-#  Auther: ALT
+#  Author: ALT
 # ─────────────────────────────────────────────────────────────────
 
-name: NFT Bot Daily Run (Dual Account)
+name: NFT Bot Daily Run
 
 on:
   schedule:
-    - cron: "23 3 * * *"   # Every day at 03:23 UTC ( 05:23 SAST / UTC+2 )
+    - cron: "23 3 * * *"   # Every day at 03:23 UTC (05:23 SAST / UTC+2)
   workflow_dispatch:        # Also allows manual trigger from GitHub UI
 
 env:
-  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true   # Opt into Node.js 24 now
+  FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   run-bot:
-    name: Run rarbtc NFT Bot for Two Accounts
+    name: Run rarbtc NFT Bot
     runs-on: ubuntu-latest
-    timeout-minutes: 60     # Increased for two sequential runs
+    timeout-minutes: 120    # 2 hours — covers up to ~5 accounts
 
     steps:
       # 1. Check out the repository
@@ -37,8 +38,7 @@ jobs:
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      # 4. Install system dependencies manually (Ubuntu 24.04 compatible)
-      #    playwright install-deps fails on Ubuntu 24.04 due to libasound2 rename
+      # 4. Install system dependencies (Ubuntu 24.04 compatible)
       - name: Install system dependencies for Chromium
         run: |
           sudo apt-get update
@@ -61,46 +61,54 @@ jobs:
             libxrandr2 \
             xvfb
 
-      # 5. Install Playwright's Chromium browser only (no install-deps)
+      # 5. Install Playwright Chromium
       - name: Install Playwright Chromium browser
         run: playwright install chromium
 
-      # 6. Ensure logs directory exists before bot runs
+      # 6. Create logs directory
       - name: Create logs directory
         run: mkdir -p logs
 
-      # 7. Run the bot for Account 1 — credentials injected from GitHub Secrets
-      - name: Run NFT bot - Account 1
+      # 7. Run the bot — loops through all accounts internally via ACCOUNT_COUNT
+      - name: Run NFT bot
         env:
-          RARBTC_USERNAME:             ${{ secrets.RARBTC_USERNAME_1 }}
-          RARBTC_PASSWORD:             ${{ secrets.RARBTC_PASSWORD_1 }}
-          RARBTC_RESERVATION_PASSWORD: ${{ secrets.RARBTC_RESERVATION_PASSWORD_1 }}
+          ACCOUNT_COUNT:                    ${{ vars.ACCOUNT_COUNT }}
+          RARBTC_USERNAME_1:                ${{ secrets.RARBTC_USERNAME_1 }}
+          RARBTC_PASSWORD_1:                ${{ secrets.RARBTC_PASSWORD_1 }}
+          RARBTC_RESERVATION_PASSWORD_1:    ${{ secrets.RARBTC_RESERVATION_PASSWORD_1 }}
+          RARBTC_USERNAME_2:                ${{ secrets.RARBTC_USERNAME_2 }}
+          RARBTC_PASSWORD_2:                ${{ secrets.RARBTC_PASSWORD_2 }}
+          RARBTC_RESERVATION_PASSWORD_2:    ${{ secrets.RARBTC_RESERVATION_PASSWORD_2 }}
+          RARBTC_USERNAME_3:                ${{ secrets.RARBTC_USERNAME_3 }}
+          RARBTC_PASSWORD_3:                ${{ secrets.RARBTC_PASSWORD_3 }}
+          RARBTC_RESERVATION_PASSWORD_3:    ${{ secrets.RARBTC_RESERVATION_PASSWORD_3 }}
+          RARBTC_USERNAME_4:                ${{ secrets.RARBTC_USERNAME_4 }}
+          RARBTC_PASSWORD_4:                ${{ secrets.RARBTC_PASSWORD_4 }}
+          RARBTC_RESERVATION_PASSWORD_4:    ${{ secrets.RARBTC_RESERVATION_PASSWORD_4 }}
+          RARBTC_USERNAME_5:                ${{ secrets.RARBTC_USERNAME_5 }}
+          RARBTC_PASSWORD_5:                ${{ secrets.RARBTC_PASSWORD_5 }}
+          RARBTC_RESERVATION_PASSWORD_5:    ${{ secrets.RARBTC_RESERVATION_PASSWORD_5 }}
+          SENDGRID_API_KEY:                 ${{ secrets.SENDGRID_API_KEY }}
+          NOTIFY_EMAIL_TO:                  ${{ secrets.NOTIFY_EMAIL_TO }}
+          NOTIFY_EMAIL_FROM:                ${{ secrets.NOTIFY_EMAIL_FROM }}
         run: python bot.py
 
-      # 8. Run the bot for Account 2 — runs after Account 1 completes
-      - name: Run NFT bot - Account 2
-        env:
-          RARBTC_USERNAME:             ${{ secrets.RARBTC_USERNAME_2 }}
-          RARBTC_PASSWORD:             ${{ secrets.RARBTC_PASSWORD_2 }}
-          RARBTC_RESERVATION_PASSWORD: ${{ secrets.RARBTC_RESERVATION_PASSWORD_2 }}
-        run: python bot.py
-
-      # 9. Upload logs as a downloadable artifact (kept 30 days)
+      # 8. Upload all account logs
       - name: Upload run logs
-        if: always()   # Upload even if the bot failed
+        if: always()
         uses: actions/upload-artifact@v4.6.2
         with:
           name: bot-logs-${{ github.run_id }}
           path: logs/
           retention-days: 30
-          if-no-files-found: warn   # Don't fail if logs dir is empty
+          if-no-files-found: warn
 
-      # 10. Upload error screenshot if one was saved
-      - name: Upload error screenshot (if any)
-        if: failure()
+      # 9. Upload error screenshots
+      - name: Upload error screenshots (if any)
+        if: always()
         uses: actions/upload-artifact@v4.6.2
         with:
-          name: error-screenshot-${{ github.run_id }}
+          name: error-screenshots-${{ github.run_id }}
           path: logs/*.png
           retention-days: 30
           if-no-files-found: ignore
