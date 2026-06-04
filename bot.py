@@ -16,9 +16,8 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 # ── Load environment variables ────────────────────────────────────────────────
 load_dotenv()
 
-USERNAME             = os.environ.get("RARBTC_USERNAME", "")
-PASSWORD             = os.environ.get("RARBTC_PASSWORD", "")
-RESERVATION_PASSWORD = os.environ.get("RARBTC_RESERVATION_PASSWORD", "")
+# Credentials loaded per-account at runtime via get_account_credentials(N)
+# See ACCOUNT_COUNT variable and RARBTC_USERNAME_N secrets
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 BASE_URL         = "https://rarbtc.com"
@@ -51,15 +50,11 @@ log = logging.getLogger("rarbtc-bot")
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
 def validate_env() -> None:
-    """Abort early if any required credential is missing."""
-    missing = [v for v, k in [
-        ("RARBTC_USERNAME",             USERNAME),
-        ("RARBTC_PASSWORD",             PASSWORD),
-        ("RARBTC_RESERVATION_PASSWORD", RESERVATION_PASSWORD),
-    ] if not k]
-    if missing:
-        log.error("Missing required environment variables: %s", ", ".join(missing))
+    """Warn if ACCOUNT_COUNT is not set. Individual account creds checked at runtime."""
+    if ACCOUNT_COUNT < 1:
+        log.error("ACCOUNT_COUNT must be >= 1. Got: %d", ACCOUNT_COUNT)
         sys.exit(1)
+    log.info("ACCOUNT_COUNT = %d", ACCOUNT_COUNT)
 
 
 def retry(fn, label: str, max_attempts: int = MAX_RETRIES):
