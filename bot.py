@@ -85,8 +85,13 @@ def retry(fn, label: str, max_attempts: int = MAX_RETRIES):
 # ── Core automation ───────────────────────────────────────────────────────────
 
 class RarbtcBot:
-    def __init__(self, page):
-        self.page = page
+    def __init__(self, page, username: str, password: str, reservation_password: str, account_num: int):
+        self.page                 = page
+        self.username             = username
+        self.password             = password
+        self.reservation_password = reservation_password
+        self.account_num          = account_num
+        self.log                  = log  # overridden per account in run_account()
 
     # ── Authentication ────────────────────────────────────────────────────────
 
@@ -612,95 +617,288 @@ class RarbtcBot:
         self.log.info("=== Cycle %d complete. ===", cycle_num)
 
 
+def get_account_credentials(account_num: int):
+    """Load credentials for account N. Returns (tuple, []) or (None, [missing])."""
+    username = os.environ.get(f"RARBTC_USERNAME_{account_num}", "")
+    password = os.environ.get(f"RARBTC_PASSWORD_{account_num}", "")
+    res_pass = os.environ.get(f"RARBTC_RESERVATION_PASSWORD_{account_num}", "")
+    missing  = []
+    if not username: missing.append(f"RARBTC_USERNAME_{account_num}")
+    if not password: missing.append(f"RARBTC_PASSWORD_{account_num}")
+    if not res_pass: missing.append(f"RARBTC_RESERVATION_PASSWORD_{account_num}")
+    if missing:
+        return None, missing
+    return (username, password, res_pass), []
+
+
+def send_run_notification(all_summaries: list) -> None:
+    """Send SendGrid email after all accounts complete. Skips silently if not configured."""
+    if not EMAIL_ENABLED:
+        log.info("Email notifications not configured — skipping.")
+        return
+    try:
+        from sendgrid import SendGridAPIClient
+        from sendgrid.helpers.mail import Mail
+    except ImportError:
+        log.warning("SendGrid library not installed.")
+        return
+
+    run_date = datetime.utcnow().strftime("%Y-%m-%d")
+    run_time = datetime.utcnow().strftime("%H:%M UTC")
+    account_rows = ""
+
+    for s in all_summaries:
+        status_color = "#27ae60" if s["status"] == "SUCCESS" else "#e74c3c"
+        day_income   = s.get("day_income", "N/A")
+        income_color = "#27ae60" if day_income != "N/A" and not str(day_income).startswith("-") else "#e74c3c"
+        failure_row  = ""
+        if s.get("failure_reason"):
+            failure_row = f'''
+            <tr><td colspan="2" style="padding:8px 12px;background:#fff3cd;color:#856404;">
+                <strong>Issue:</strong> {s["failure_reason"]}</td></tr>'''
+
+        account_rows += f'''
+        <div style="margin-bottom:24px;border:1px solid #e0e0e0;border-radius:8px;overflow:hidden;">
+          <div style="background:#2c3e50;color:white;padding:12px 16px;display:flex;justify-content:space-between;">
+            <strong>Account {s["account_num"]}</strong>
+            <span style="background:{status_color};padding:2px 10px;border-radius:12px;font-size:13px;">{s["status"]}</span>
+          </div>
+          <table style="width:100%;border-collapse:collapse;font-size:14px;">
+            <tr style="background:#f8f9fa;"><td style="padding:8px 12px;color:#666;width:60%;">Reservations at login</td>
+              <td style="padding:8px 12px;font-weight:bold;">{s.get("reservations_start","N/A")}</td></tr>
+            <tr><td style="padding:8px 12px;color:#666;">NFTs available at login</td>
+              <td style="padding:8px 12px;font-weight:bold;">{s.get("nfts_start","N/A")}</td></tr>
+            <tr style="background:#f8f9fa;"><td style="padding:8px 12px;color:#666;">Reservations remaining after run</td>
+              <td style="padding:8px 12px;font-weight:bold;">{s.get("reservations_end","N/A")}</td></tr>
+            <tr><td style="padding:8px 12px;color:#666;">NFTs unsold after run</td>
+              <td style="padding:8px 12px;font-weight:bold;">{s.get("nfts_end","N/A")}</td></tr>
+            <tr style="background:#f8f9fa;"><td style="padding:8px 12px;color:#666;"><strong>Day income</strong></td>
+              <td style="padding:8px 12px;font-weight:bold;color:{income_color};">{day_income}</td></tr>
+            {failure_row}
+          </table>
+        </div>'''
+
+    html_body = f'''
+    <div style="font-family:Arial,sans-serif;max-width:600px;margin:0 auto;color:#333;">
+      <div style="background:#2c3e50;color:white;padding:20px;border-radius:8px 8px 0 0;text-align:center;">
+        <h2 style="margin:0;">Rarzz NFT Bot — Daily Report</h2>
+        <p style="margin:6px 0 0;opacity:0.8;">{run_date} | {run_time}</p>
+      </div>
+      <div style="padding:20px;background:#fff;border:1px solid #e0e0e0;border-top:none;">
+        {account_rows}
+      </div>
+      <div style="padding:12px;text-align:center;color:#999;font-size:12px;">
+        Sent by Rarzz NFT Bot | Logs available in GitHub Actions artifacts
+      </div>
+    </div>'''
+
+    try:
+        msg = Mail(from_email=NOTIFY_EMAIL_FROM, to_emails=NOTIFY_EMAIL_TO,
+                   subject=f"Rarzz NFT Bot — Daily Report {run_date}", html_content=html_body)
+        sg = SendGridAPIClient(SENDGRID_API_KEY)
+        resp = sg.send(msg)
+        log.info("Email sent. Status: %d", resp.status_code)
+    except Exception as e:
+        log.warning("Failed to send email: %s", e)
+
+
+def run_account(account_num: int) -> dict:
+    """Run full bot flow for one account. Returns summary dict."""
+    summary = {
+        "account_num": account_num, "status": "SKIPPED", "failure_reason": None,
+        "reservations_start": "N/A", "nfts_start": "N/A",
+        "reservations_end": "N/A", "nfts_end": "N/A", "day_income": "N/A",
+    }
+
+    creds, missing = get_account_credentials(account_num)
+    if creds is None:
+        reason = f"Missing GitHub Secrets: {', '.join(missing)}"
+        log.warning("Account %d SKIPPED — %s", account_num, reason)
+        summary["failure_reason"] = reason
+        skip_log = logs_dir / f"account_{account_num}_SKIPPED_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.log"
+        skip_log.write_text(f"Account {account_num} skipped at {datetime.utcnow()} UTC\nReason: {reason}\n", encoding="utf-8")
+        return summary
+
+    username, password, reservation_password = creds
+
+    # Per-account logger
+    acct_log_path = logs_dir / f"account_{account_num}_bot_{datetime.utcnow().strftime('%Y%m%d_%H%M%S')}.log"
+    acct_handler  = logging.FileHandler(acct_log_path, encoding="utf-8")
+    acct_handler.setFormatter(logging.Formatter("%(asctime)s UTC | %(levelname)-8s | %(message)s", datefmt="%Y-%m-%d %H:%M:%S"))
+    acct_logger   = logging.getLogger(f"rarbtc-bot-acct{account_num}")
+    acct_logger.setLevel(logging.INFO)
+    acct_logger.addHandler(acct_handler)
+    acct_logger.addHandler(logging.StreamHandler(sys.stdout))
+
+    acct_logger.info("=" * 50)
+    acct_logger.info("  ACCOUNT %d — Run started", account_num)
+    acct_logger.info("  Log: %s", acct_log_path)
+    acct_logger.info("=" * 50)
+
+    with sync_playwright() as pw:
+        browser = pw.chromium.launch(headless=True, args=[
+            "--no-sandbox", "--disable-dev-shm-usage", "--disable-blink-features=AutomationControlled",
+        ])
+        context = browser.new_context(
+            user_agent="Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36",
+            viewport={"width": 1280, "height": 800},
+        )
+        page = context.new_page()
+        bot  = RarbtcBot(page, username, password, reservation_password, account_num)
+        bot.log = acct_logger
+
+        try:
+            retry(bot.login, label="Login")
+
+            # Opening stats
+            try:
+                summary["reservations_start"] = bot.get_reservations_available()
+                bot.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
+                time.sleep(10)
+                summary["nfts_start"] = bot._get_nft_total_number()
+            except Exception as e:
+                acct_logger.warning("Could not collect opening stats: %s", e)
+
+            # Dynamic cycle count from reservations available
+            total_cycles = bot.get_reservations_available()
+            if total_cycles == 0:
+                acct_logger.info("No reservations available — checking for unsold NFTs only.")
+            else:
+                total_cycles = min(total_cycles, MAX_CYCLES_CAP)
+                acct_logger.info("Reservations: %d — running %d cycle(s).", total_cycles, total_cycles)
+
+            completed = 0
+            for cycle in range(1, total_cycles + 1):
+                remaining = bot.get_reservations_available()
+                if remaining == 0:
+                    acct_logger.info("No reservations remaining — stopping early.")
+                    break
+                bot.run_cycle(cycle, total_cycles)
+                completed += 1
+
+            # Sell any leftover NFTs
+            bot.ensure_logged_in()
+            leftover = bot.get_nfts_available()
+            if leftover > 0:
+                acct_logger.info("%d unsold NFT(s) found — selling ...", leftover)
+                retry(bot.sell_from_my_nfts, label="PostCycle:SellRemaining")
+
+            # Closing stats
+            try:
+                summary["reservations_end"] = bot.get_reservations_available()
+                bot.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
+                time.sleep(10)
+                try:
+                    cb = bot.page.query_selector("div.notice-btn div:last-child")
+                    if cb and cb.is_visible(): cb.click(); time.sleep(5)
+                except Exception: pass
+                nfts_left = bot._get_nft_total_number()
+                summary["nfts_end"] = nfts_left
+                wait_msg = "NFTs still listed" if nfts_left > 0 else "0 NFTs"
+                acct_logger.info("%s — waiting 2 min for settlement ...", wait_msg)
+                time.sleep(120)
+                summary["day_income"] = bot.get_today_reservation_income()
+                acct_logger.info("Day income: %s", summary["day_income"])
+            except Exception as e:
+                acct_logger.warning("Could not collect closing stats: %s", e)
+
+            summary["status"] = "SUCCESS"
+            acct_logger.info("Account %d — All %d cycle(s) completed.", account_num, completed)
+
+        except Exception as exc:
+            err = str(exc)
+            if "Timeout" in err and "login" in err.lower():
+                reason = "Could not log in — check credentials in GitHub Secrets."
+            elif "Timeout" in err and "Reservation Successful" in err:
+                reason = "Reservation placed but confirmation did not appear within 3 minutes."
+            elif "Timeout" in err and "NFT Sale" in err:
+                reason = "NFT reserved but sale popup did not appear."
+            elif "Timeout" in err and "one-bt" in err:
+                reason = "Reservation button not found — reservations may be used up."
+            elif "credentials rejected" in err:
+                reason = "Login failed — username or password is incorrect."
+            else:
+                reason = f"Unexpected error: {err[:200]}"
+
+            summary["status"]         = "FAILED"
+            summary["failure_reason"] = reason
+
+            try:
+                if summary["day_income"] == "N/A":
+                    summary["day_income"] = bot.get_today_reservation_income()
+                if summary["nfts_end"] == "N/A":
+                    bot.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
+                    time.sleep(5)
+                    summary["nfts_end"] = bot._get_nft_total_number()
+            except Exception: pass
+
+            acct_logger.error("Account %d — FATAL ERROR: %s", account_num, exc, exc_info=True)
+            ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+            try:
+                acct_logger.info("URL at crash: %s", page.url)
+                page.screenshot(path=str(logs_dir / f"account_{account_num}_error_{ts}.png"), full_page=True)
+                (logs_dir / f"account_{account_num}_error_page_{ts}.html").write_text(page.content(), encoding="utf-8")
+            except Exception: pass
+
+        finally:
+            context.close()
+            browser.close()
+            acct_logger.info("Account %d — Browser closed at %s UTC.", account_num, datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
+
+            # Write daily report log
+            try:
+                report_path = logs_dir / f"account_{account_num}_report_{datetime.utcnow().strftime('%Y%m%d')}.log"
+                lines = [
+                    "=" * 50,
+                    f"  ACCOUNT {account_num} — Daily Report",
+                    f"  Date: {datetime.utcnow().strftime('%Y-%m-%d')}",
+                    f"  Status: {summary.get('status','UNKNOWN')}",
+                    "=" * 50,
+                    f"  Reservations at login:          {summary.get('reservations_start','N/A')}",
+                    f"  NFTs available at login:        {summary.get('nfts_start','N/A')}",
+                    f"  Reservations after run:         {summary.get('reservations_end','N/A')}",
+                    f"  NFTs unsold after run:          {summary.get('nfts_end','N/A')}",
+                    f"  Day income:                     {summary.get('day_income','N/A')}",
+                ]
+                if summary.get("failure_reason"):
+                    lines += ["", f"  Issue: {summary['failure_reason']}"]
+                lines.append("=" * 50)
+                report_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+            except Exception as re_err:
+                acct_logger.warning("Could not write report: %s", re_err)
+
+            acct_handler.close()
+            acct_logger.removeHandler(acct_handler)
+
+    return summary
+
+
 def main() -> None:
     validate_env()
     log.info("╔══════════════════════════════════════╗")
     log.info("║  rarbtc.com NFT Bot  —  Run started  ║")
     log.info("╚══════════════════════════════════════╝")
-    log.info("Log file: %s", log_filename)
+    log.info("Running %d account(s) sequentially.", ACCOUNT_COUNT)
 
-    with sync_playwright() as pw:
-        browser = pw.chromium.launch(
-            headless=True,
-            args=[
-                "--no-sandbox",
-                "--disable-dev-shm-usage",
-                "--disable-blink-features=AutomationControlled",
-            ],
-        )
-        context = browser.new_context(
-            user_agent=(
-                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-                "AppleWebKit/537.36 (KHTML, like Gecko) "
-                "Chrome/124.0.0.0 Safari/537.36"
-            ),
-            viewport={"width": 1280, "height": 800},
-        )
-        page = context.new_page()
-        bot  = RarbtcBot(page)
+    if not EMAIL_ENABLED:
+        log.info("Email notifications disabled — set SENDGRID_API_KEY, NOTIFY_EMAIL_TO, NOTIFY_EMAIL_FROM to enable.")
 
-        try:
-            retry(bot.login, label="Login")
+    all_summaries = []
+    for account_num in range(1, ACCOUNT_COUNT + 1):
+        log.info("-" * 50)
+        log.info("Starting Account %d of %d ...", account_num, ACCOUNT_COUNT)
+        summary = run_account(account_num)
+        all_summaries.append(summary)
+        log.info("Account %d result: %s | Day income: %s", account_num, summary["status"], summary.get("day_income","N/A"))
 
-            # Read reservations at login — this drives the number of cycles
-            total_cycles = bot.get_reservations_available()
-            if total_cycles == 0:
-                acct_logger.info("No reservations available at login — skipping to NFT sell check.")
-            else:
-                total_cycles = min(total_cycles, MAX_CYCLES_CAP)
-                acct_logger.info("Reservations available: %d — running %d cycle(s).", total_cycles, total_cycles)
+    log.info("-" * 50)
+    log.info("All accounts processed.")
+    for s in all_summaries:
+        log.info("  Account %d: %s | Day income: %s", s["account_num"], s["status"], s.get("day_income","N/A"))
 
-            completed = 0
-            for cycle in range(1, total_cycles + 1):
-                # Re-check reservations before each cycle — stop if used up
-                remaining = bot.get_reservations_available()
-                if remaining == 0:
-                    acct_logger.info("No reservations remaining — stopping cycles early.")
-                    break
-                bot.run_cycle(cycle, total_cycles)
-                completed += 1
+    send_run_notification(all_summaries)
+    log.info("Run finished at %s UTC.", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
 
-            # Always check /nft/my for any unsold NFTs after all cycles
-            bot.ensure_logged_in()
-            leftover = bot.get_nfts_available()
-            if leftover > 0:
-                acct_logger.info("%d unsold NFT(s) found after cycles — selling ...", leftover)
-                retry(bot.sell_from_my_nfts, label="PostCycle:SellRemaining")
-
-            acct_logger.info("All %d cycle(s) completed successfully.", completed)
-
-        except Exception as exc:
-            log.error("FATAL ERROR - aborting run: %s", exc, exc_info=True)
-            ts = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
-
-            # Log current URL at time of crash
-            try:
-                log.info("URL at crash: %s", page.url)
-            except Exception:
-                pass
-
-            # Save full-page screenshot for visual debugging
-            screenshot_path = logs_dir / f"error_{ts}.png"
-            try:
-                page.screenshot(path=str(screenshot_path), full_page=True)
-                log.info("Screenshot saved: %s", screenshot_path)
-            except Exception as se:
-                log.warning("Could not save screenshot: %s", se)
-
-            # Save page HTML so you can inspect real CSS selectors on the live site
-            html_path = logs_dir / f"error_page_{ts}.html"
-            try:
-                html_path.write_text(page.content(), encoding="utf-8")
-                log.info("Page HTML saved: %s - open this to find correct selectors", html_path)
-            except Exception as he:
-                log.warning("Could not save page HTML: %s", he)
-
-            sys.exit(1)
-
-        finally:
-            context.close()
-            browser.close()
-            log.info("Browser closed. Run finished at %s UTC.", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
 
 
 if __name__ == "__main__":
