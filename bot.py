@@ -17,7 +17,13 @@ from playwright.sync_api import sync_playwright, TimeoutError as PlaywrightTimeo
 load_dotenv()
 
 # Credentials loaded per-account at runtime via get_account_credentials(N)
-# See ACCOUNT_COUNT variable and RARBTC_USERNAME_N secrets
+ACCOUNT_COUNT = int(os.environ.get("ACCOUNT_COUNT", "1"))
+
+# ── Email notification config (optional) ──────────────────────────────────────
+SENDGRID_API_KEY  = os.environ.get("SENDGRID_API_KEY", "")
+NOTIFY_EMAIL_TO   = os.environ.get("NOTIFY_EMAIL_TO", "")
+NOTIFY_EMAIL_FROM = os.environ.get("NOTIFY_EMAIL_FROM", "")
+EMAIL_ENABLED     = bool(SENDGRID_API_KEY and NOTIFY_EMAIL_TO and NOTIFY_EMAIL_FROM)
 
 # ── Constants ─────────────────────────────────────────────────────────────────
 BASE_URL         = "https://rarbtc.com"
