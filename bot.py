@@ -117,12 +117,12 @@ class RarbtcBot:
 
         # Step 3: Fill email field (exact placeholder from live site HTML)
         log.info("Filling email field ...")
-        self.page.fill("input[placeholder='Please enter your email']", USERNAME, timeout=15_000)
+        self.page.fill("input[placeholder='Please enter your email']", self.username, timeout=15_000)
         log.info("Email filled.")
 
         # Step 4: Fill password field (exact placeholder from live site HTML)
         log.info("Filling password field ...")
-        self.page.fill("input[placeholder='Password must be 8-20 characters or more']", PASSWORD, timeout=15_000)
+        self.page.fill("input[placeholder='Password must be 8-20 characters or more']", self.password, timeout=15_000)
         log.info("Password filled.")
 
         # Step 5: Click the Login button (a <div class="bt flex-center"> on this site)
@@ -231,7 +231,7 @@ class RarbtcBot:
         except Exception:
             pass
         # Type directly into the hidden input
-        self.page.fill("div.pw input[type='text']", RESERVATION_PASSWORD, timeout=10_000)
+        self.page.fill("div.pw input[type='text']", self.reservation_password, timeout=10_000)
         time.sleep(10)
 
         log.info("Clicking Confirm button ...")
