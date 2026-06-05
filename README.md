@@ -1,33 +1,24 @@
 # Rarzz NFT Trading Bot
 
 Fully automated, cloud-hosted NFT buy-and-sell bot for [rarbtc.com](https://rarbtc.com) (Rarzz NFT platform).
-Runs daily at **03:23 UTC (05:23 SAST)** via **GitHub Actions** — no local machine required.
+Runs daily at **07:00 SAST (05:00 UTC)** via **GitHub Actions** — no local machine required.
 Supports **N accounts** running sequentially in one daily job.
-Sends a **daily email report** via SendGrid after all accounts complete.
 
 ---
 
-## Purpose
+## Project Summary & Developer Brief
 
-This bot automates the daily NFT reservation and sale cycle on rarbtc.com. Each account is allowed a fixed number of reservations per 24-hour period (typically 2–3 depending on membership level). The bot:
-- Logs in, checks how many reservations are available
-- Runs exactly that many buy-sell cycles
-- Sells any leftover unsold NFTs after all cycles
-- Reads the day's income from the platform's own income page
-- Sends a summary email and writes a per-account report log
+This bot was built iteratively through live debugging on rarbtc.com. Every selector, popup, and flow was discovered by running the bot, capturing error screenshots and HTML dumps, and updating the code to match the real site structure. A new developer can use this document alone to understand, recreate, or extend the bot.
 
 ---
 
 ## Tech Stack
 
-| Component | Technology |
-|---|---|
-| Language | Python 3.11 |
-| Browser automation | Playwright (headless Chromium) |
-| Scheduling | GitHub Actions cron |
-| Credential storage | GitHub Secrets + GitHub Actions Variables |
-| Email notifications | SendGrid |
-| Dependencies | `playwright==1.44.0`, `python-dotenv==1.0.1`, `sendgrid==6.11.0` |
+- **Language**: Python 3.11
+- **Browser automation**: Playwright (headless Chromium)
+- **Scheduling**: GitHub Actions (cron)
+- **Credential storage**: GitHub Secrets + GitHub Actions Variables
+- **Dependencies**: `playwright==1.44.0`, `python-dotenv==1.0.1`
 
 ---
 
@@ -42,164 +33,121 @@ rarbtc-nft-bot/
 ├── requirements.txt           # Python dependencies
 ├── .env.example               # Credential template (safe to commit)
 ├── .gitignore                 # Blocks .env, logs, screenshots
-├── SECURITY.md                # Security policy
+├── SECURITY.md                # Security policy and credential safety guide
 └── README.md                  # This file
 ```
 
 ---
 
-## Full Bot Flow (What It Does)
+## What the Bot Does
 
-### Startup — once per account
-1. Read `ACCOUNT_COUNT` — loop through each account sequentially
-2. Load credentials for account N (`RARBTC_USERNAME_N` etc.)
-3. If secrets missing → skip account, write skip log, continue to next
-4. Launch headless Chromium browser
-5. Navigate to `https://rarbtc.com/login`
-6. Dismiss cookie consent popup (`button.accept-btn`)
-7. Click Email login tab (`#tab-0`)
-8. Fill email (`input[placeholder='Please enter your email']`)
-9. Fill password (`input[placeholder='Password must be 8-20 characters or more']`)
-10. Click login button (`div.bt.flex-center`)
-11. Wait for URL redirect away from `/login` using `page.wait_for_url()`
-12. Close promotional popup (`div.notice-btn div:last-child`)
-13. **Collect opening stats:** reservations available, NFTs available
+### On every daily run:
+1. Reads `ACCOUNT_COUNT` variable to know how many accounts to process
+2. For each account (1 through N):
+   - Logs in to rarbtc.com
+   - Checks reservations available today
+   - Runs up to 2 buy-sell cycles
+   - Produces a separate log file
+   - Continues to next account regardless of success or failure
 
-### Cycle loop — driven by reservations available
-14. Call `get_reservations_available()` → returns integer (e.g. 2 or 3)
-15. Apply safety cap of 10
-16. Loop that many times:
-    - Re-check reservations before each cycle — if 0, break early
-    - **Sell existing NFTs first** (if any on `/nft/my`)
-    - **Reserve NFT** (full flow below)
-    - **Sell reserved NFT** (full flow below)
-    - Wait **2 minutes** between cycles
-17. After all cycles — check `/nft/my` for any leftover unsold NFTs and sell them
+### Decision logic per cycle:
 
-### Reserve NFT flow
-1. Navigate to `/nft/reservation`
-2. Close promotional popup if present
-3. Dismiss tutorial overlay (`text='Skip'`) if present
-4. Check NFT total on `/nft/my` — if > 0, sell them first, wait 2 min
-5. Navigate back to `/nft/reservation`
-6. Click `button.one-bt` (Reservation button)
-7. Wait for fund password popup (`div.pw input[type='text']`)
-8. Click `div.van-password-input` to focus the PIN field
-9. Fill hidden input with reservation password
-10. Click `button.van-button--primary` (Confirm)
-11. Wait up to **3 minutes** for `text='Reservation Successful'` popup
-12. Click `div.but button:last-child` (Sell NFT button in popup)
+| Reservations Available | Action |
+|---|---|
+| 2 | Check NFT total → sell existing → Reserve → Sell → wait 5 min |
+| 1 | Check NFT total → sell existing → Reserve → Sell → wait 5 min |
+| 0 | Go to `/nft/my` → sell any available NFTs → done |
 
-### Sell NFT flow (after reservation)
-1. Force navigate to `https://rarbtc.com/nft/my`
-   - *(Site may redirect to `/nft/reservation/list?id=X` — always override)*
-2. Close popup if present
-3. Find `button[data-v-5055aed9]` (Sell NFT button)
-4. Click it → wait for `text='NFT Sale'` popup (20s timeout)
-5. Click `button.van-button--primary` (Sell NFT inside popup)
-6. Wait for `text='Selling application submitted successfully'`
-7. Click `button.van-button--primary` (I understand) — graceful if auto-closed
+### Before every reservation:
+- Navigate to `/nft/my`
+- Count sell buttons (`button[data-v-5055aed9]`) as NFT total indicator
+- If **> 0** → sell all existing NFTs → wait 5 min → then reserve
+- If **= 0** → reserve immediately
 
-### Sell from My NFT page (standalone)
-Same as above but loops through all sell buttons found on the page.
+### Full sell flow (per NFT):
+1. Click `Sell NFT` (`button[data-v-5055aed9]`)
+2. NFT Sale popup → click `button.van-button--primary`
+3. Wait for `"Selling application submitted successfully"`
+4. Click `button.van-button--primary` (I understand) — handles auto-close gracefully
+5. Wait **5 minutes** before next cycle
 
-### Closing stats — after all cycles
-1. Check reservations remaining
-2. Navigate to `/nft/my` — count unsold NFTs
-3. If NFTs > 0 → wait 2 min for sales to settle → recheck
-4. If NFTs = 0 → wait 2 min anyway for funds to settle
-5. Navigate to `https://rarbtc.com/person/myIncome`
-6. Find `div.info` containing `div.text` with "personal reservation income"
-7. Read its sibling `div.num` value (e.g. `$4.4728`) → this is the day income
-
-### Session handling (throughout)
-- Before every major step: check if URL contains `/login`
-- If yes → re-login → close promotional popup → continue
-
-### Email + log report — after all accounts done
-- Write `account_N_report_YYYYMMDD.log` per account
-- Send single SendGrid email with all accounts summarised
+### Session handling:
+- Checks URL before every major step
+- If redirected to `/login` → auto re-login → close promotional popup → continue
 
 ---
 
-## Confirmed Site Selectors
+## Site Structure & Confirmed Selectors
 
-All selectors confirmed from live HTML inspection. Critical for recreation.
+All selectors confirmed from live HTML inspection during development.
 
 ### Login page (`/login`)
-| Element | Selector |
+
+| Element | Selector / Method |
 |---|---|
 | Cookie consent dismiss | `button.accept-btn` |
 | Email login tab | `#tab-0` |
 | Email input | `input[placeholder='Please enter your email']` |
 | Password input | `input[placeholder='Password must be 8-20 characters or more']` |
 | Login button | `div.bt.flex-center` |
-| Login success detection | `page.wait_for_url(lambda url: "/login" not in url, timeout=20_000)` |
+| Login success | `page.wait_for_url(lambda url: "/login" not in url, timeout=20_000)` |
 
-### Promotional popup (appears on every login and some pages)
+### Promotional popup (appears on every login and some page navigations)
+
 | Element | Selector |
 |---|---|
 | Close button | `div.notice-btn div:last-child` |
-| Structure | `div.notice-btn > div[Previous] + div[Close]` |
 
 ### Reservation page (`/nft/reservation`)
+
 | Element | Selector |
 |---|---|
 | Reservation button | `button.one-bt` |
-| Fund password PIN visual | `div.van-password-input` (click to focus) |
-| Fund password hidden input | `div.pw input[type='text']` (fill this) |
+| Fund password PIN input | `div.pw input[type='text']` |
+| PIN visual display (click to focus) | `div.van-password-input` |
 | Confirm button | `button.van-button--primary` |
 | Reservation Successful popup | `text='Reservation Successful'` |
 | Sell NFT in success popup | `div.but button:last-child` |
-| Tutorial overlay skip | `text='Skip'` |
 | Reservations count | `li` containing `"Number of reservations available today"` → child `div.val` |
+| Tutorial overlay skip | `text='Skip'` |
 
 ### My NFT page (`/nft/my`)
+
 | Element | Selector |
 |---|---|
 | Sell NFT button | `button[data-v-5055aed9]` |
 | NFT Sale popup | `text='NFT Sale'` |
-| Confirm sell in popup | `button.van-button--primary` |
-| Sale success text | `text='Selling application submitted successfully'` |
+| Confirm sell | `button.van-button--primary` |
+| Success confirmation | `text='Selling application submitted successfully'` |
 | I understand button | `button.van-button--primary` |
-
-### Income page (`/person/myIncome`)
-| Element | Selector |
-|---|---|
-| Income container | `div.info` (find one containing "personal reservation income") |
-| Label | `div.info > div.text` |
-| Value | `div.info > div.num` |
-| Target label text | `"Today's personal reservation income"` |
 
 ---
 
-## Critical Behaviours — Must Know for Recreation
+## Key Behaviours Discovered During Development
 
-1. **Login two-step redirect** — site goes `/login` → pause → `/home`. Use `page.wait_for_url()` not `time.sleep()`.
+These were all found through failed runs and HTML inspection — critical for any developer recreating this:
 
-2. **Promotional popup on every page** — must dismiss with `div.notice-btn div:last-child` before any interaction on any page.
+1. **Login two-step redirect** — site goes `/login` → brief pause → `/home`. Must use `page.wait_for_url()` not `time.sleep()` to detect success.
 
-3. **Fund password is a PIN field** — not `input[type='password']`. It's a hidden `input[type='text']` inside `div.pw`. Must click `div.van-password-input` first to focus it before filling.
+2. **Promotional popup** — appears on every login and on some page navigations. Must always be dismissed before any interaction. Selector: `div.notice-btn div:last-child`.
 
-4. **Reservation Successful popup** — appears on `/nft/reservation` after up to 3 minutes. Has `div.but` with two buttons: `View NFT` (first) and `Sell NFT` (last-child).
+3. **Fund password field is not a standard password input** — it's a PIN-style field: hidden `input[type='text']` with `maxlength` inside `div.pw`. Must click `div.van-password-input` first to focus, then fill the hidden input.
 
-5. **After clicking Sell NFT in reservation popup** — site may redirect to `/nft/reservation/list?id=X` (collection page), NOT `/nft/my`. Always force-navigate to `/nft/my` regardless.
+4. **Reservation Successful popup** — appears on `/nft/reservation` after order processes (up to 3 min wait). Contains `div.but` with two buttons: `View NFT` (first) and `Sell NFT` (last-child).
 
-6. **I understand button auto-closes** — success popup may dismiss before click. Always wrap in `try/except` — treat either outcome as success.
+5. **After clicking Sell NFT in reservation popup** — must navigate to `/nft/my`. The NFT Sale popup does NOT appear automatically on the reservation page.
 
-7. **Session expiry mid-run** — platform logs bot out after inactivity. Check URL before every step. Re-login + close popup if on `/login`.
+6. **I understand button auto-closes** — the success popup may dismiss itself before the bot clicks the button. Always wrap in `try/except` and treat either outcome as success.
 
-8. **NFT total check** — use sell button count (`button[data-v-5055aed9]`) as the most reliable indicator. DOM text parsing is fragile.
+7. **Session expiry mid-run** — the platform can log the bot out after inactivity. Bot checks URL before each step and re-logs in automatically if on `/login`.
 
-9. **Ubuntu 24.04 runner** — `playwright install-deps` fails due to `libasound2` renamed to `libasound2t64`. Must install system dependencies manually in workflow.
+8. **NFT total check** — use sell button count (`button[data-v-5055aed9]`) as the most reliable indicator of sellable NFTs. DOM text parsing is fragile due to layout.
 
-10. **Cycle count is dynamic** — driven by `get_reservations_available()` at login. Some accounts allow 2, others 3. Never hardcode cycle count.
+9. **Ubuntu 24.04 runner incompatibility** — `playwright install-deps` fails because `libasound2` was renamed to `libasound2t64` in Ubuntu 24. Must install system dependencies manually in the workflow.
 
-11. **`button.van-button--primary` is reused** — same class for: Confirm (fund password popup), Sell NFT (sale popup), I understand (success popup). Which action it performs depends on which popup is currently visible.
+10. **`button.one-bt` disappears after reservations are used** — replaced by an "Appointment Countdown" element. Always check reservation count before attempting to click.
 
-12. **Income reading** — do NOT calculate balance difference. Read directly from `/person/myIncome` → `div.info > div.num` where label contains "personal reservation income". Read after 2-minute settlement wait.
-
-13. **`button.one-bt` disappears** — after reservations are used up, the Reservation button is replaced by "Appointment Countdown". Always check reservation count before clicking.
+11. **`button.van-button--primary` is used for multiple popups** — Confirm (fund password), Sell NFT (sale popup), and I understand (success popup) all use the same class. Context (current visible popup) determines which action it performs.
 
 ---
 
@@ -207,197 +155,139 @@ All selectors confirmed from live HTML inspection. Critical for recreation.
 
 ```
 main()
-├── validate_env()                              # Check ACCOUNT_COUNT >= 1
-├── Check email config → log if not set
+├── validate_env()                          # Check ACCOUNT_COUNT >= 1
 └── loop account_num 1 to ACCOUNT_COUNT
     └── run_account(account_num)
-        ├── get_account_credentials(N)          # Load RARBTC_USERNAME_N etc.
-        │   └── None if missing → skip + log
-        ├── Setup per-account logger            # account_N_bot_TIMESTAMP.log
+        ├── get_account_credentials(N)      # Load RARBTC_USERNAME_N etc.
+        │   └── Returns None if missing → skip with log
+        ├── Setup account-specific logger   # account_N_bot_TIMESTAMP.log
         ├── Launch Playwright browser
-        ├── RarbtcBot(page, username, password, reservation_password, account_num)
-        │   ├── self.log = account logger
-        │   ├── login()
-        │   ├── get_reservations_available()    # DOM: li > div.val, "Number of reservations available today"
-        │   ├── get_nfts_available()            # Count button[data-v-5055aed9]
-        │   ├── _get_nft_total_number()         # Count sell buttons
-        │   ├── ensure_no_nfts_before_reserve() # Sell existing → wait 2min if any
-        │   ├── ensure_logged_in()              # Re-login if URL contains /login
-        │   ├── get_today_reservation_income()  # /person/myIncome → div.info > div.num
-        │   ├── reserve_nft()                   # Full reservation flow
-        │   ├── sell_from_popup()               # Force nav to /nft/my → sell
-        │   ├── sell_from_my_nfts()             # Find all sell buttons → sell each
-        │   └── run_cycle(cycle_num, total)     # One buy-sell cycle
-        ├── Collect opening stats
-        ├── Loop: total_cycles = get_reservations_available() (cap 10)
-        │   ├── Re-check reservations → break if 0
-        │   └── run_cycle(N, total)
-        ├── Sell any leftover NFTs
-        ├── Wait 2min for settlement
-        ├── get_today_reservation_income()
-        ├── Write account_N_report_YYYYMMDD.log
-        └── Return summary dict
-
-send_run_notification(all_summaries)            # SendGrid email
+        └── RarbtcBot(page, username, password, reservation_password, account_num)
+            ├── login()
+            ├── get_reservations_available()
+            ├── get_nfts_available()
+            ├── _get_nft_total_number()
+            ├── ensure_no_nfts_before_reserve()
+            ├── ensure_logged_in()
+            ├── reserve_nft()
+            ├── sell_from_popup()
+            ├── sell_from_my_nfts()
+            └── run_cycle(N)
 ```
 
-### `run_cycle()` flow:
+### `run_cycle()` decision tree:
 ```
-ensure_logged_in()
-get_nfts_available() → if > 0 → sell_from_my_nfts() → sleep(10)
-ensure_logged_in()
-reserve_nft()
-ensure_logged_in()
-sell_from_popup()
+Check reservations available (DOM on /nft/reservation)
+├── 0 → Check /nft/my → sell if any NFTs → done
+├── 1 → Sell existing NFTs first → reserve → sell → wait 5 min
+└── 2 → Sell existing NFTs first → reserve → sell → wait 5 min
+         (cycle 2 repeats same logic)
 ```
 
 ### `reserve_nft()` flow:
 ```
-goto /nft/reservation → close popup → dismiss tutorial
 ensure_no_nfts_before_reserve()
-  └── goto /nft/my → count sell buttons
-      ├── > 0 → sell_from_my_nfts() → sleep(120)
+  └── Count button[data-v-5055aed9] on /nft/my
+      ├── > 0 → sell_from_my_nfts() → wait 5 min
       └── = 0 → continue
-goto /nft/reservation → close popup
-click button.one-bt
-wait for div.pw input[type='text']
-click div.van-password-input → fill hidden input → click button.van-button--primary
-wait text='Reservation Successful' (180s timeout)
-click div.but button:last-child (Sell NFT)
+Navigate to /nft/reservation
+Close popup if present
+Click button.one-bt (Reservation button)
+Wait for div.pw input[type='text'] (Fund password popup)
+Click div.van-password-input to focus
+Fill hidden input with reservation_password
+Click button.van-button--primary (Confirm)
+Wait for text='Reservation Successful' (up to 3 min)
+Click div.but button:last-child (Sell NFT)
 ```
 
 ### `sell_from_popup()` flow:
 ```
-goto /nft/my (force — ignore site redirect)
-close popup if present
-find button[data-v-5055aed9]
-  ├── not found → log warning → return
-  └── found → click → wait text='NFT Sale' (20s)
-      ├── timeout → log warning → return
-      └── appeared → click button.van-button--primary
-          → wait text='Selling application submitted successfully'
-          → try click button.van-button--primary (I understand)
-          → sleep(10)
-sleep(120)  ← 2 min between cycles
+Navigate to /nft/my
+Close popup if present
+Wait 10s for text='NFT Sale' (auto-shown)
+├── Not shown → click button[data-v-5055aed9] manually → wait for NFT Sale popup
+└── Shown → proceed
+Click button.van-button--primary (Sell NFT in popup)
+Wait for text='Selling application submitted successfully'
+Try click button.van-button--primary (I understand) — graceful if auto-closed
+Wait 5 minutes
 ```
 
 ---
 
-## GitHub Actions Setup
+## Multi-Account Setup
 
-### Variables (Settings → Variables → Actions)
+### Step 1 — Set ACCOUNT_COUNT variable
+GitHub repo → **Settings → Variables → Actions → New repository variable**:
+
 | Variable | Value |
 |---|---|
-| `ACCOUNT_COUNT` | Number of accounts to run (e.g. `2`) |
+| `ACCOUNT_COUNT` | Number of accounts (e.g. `1`, `2`, `5`) |
 
-### Secrets (Settings → Secrets and variables → Actions)
-For each account N (1 through ACCOUNT_COUNT):
+### Step 2 — Add secrets for each account
+GitHub repo → **Settings → Secrets and variables → Actions → New repository secret**:
+
+For each account `N` from 1 to ACCOUNT_COUNT:
+
 | Secret | Value |
 |---|---|
-| `RARBTC_USERNAME_N` | Login email |
-| `RARBTC_PASSWORD_N` | Login password |
-| `RARBTC_RESERVATION_PASSWORD_N` | Fund/PIN password |
+| `RARBTC_USERNAME_N` | Account N login email |
+| `RARBTC_PASSWORD_N` | Account N login password |
+| `RARBTC_RESERVATION_PASSWORD_N` | Account N fund/PIN password |
 
-Email notification secrets (optional — bot continues if not set):
-| Secret | Value |
+The workflow pre-loads secrets for up to 5 accounts. To support more, add additional secret references in `nft_bot.yml`.
+
+### Account skip behaviour
+If secrets for an account are missing, the bot:
+- Logs the skip reason to `account_N_SKIPPED_TIMESTAMP.log`
+- Continues to the next account without failing the run
+
+### Log files per run
+```
+logs/
+├── account_1_bot_20260513_050012.log
+├── account_2_bot_20260513_051800.log
+├── account_3_SKIPPED_20260513_053000.log
+├── account_1_error_20260513_050512.png    (if account 1 failed)
+└── account_1_error_page_20260513_050512.html
+```
+
+### Timing estimate
+
+| Accounts | Est. daily runtime |
 |---|---|
-| `SENDGRID_API_KEY` | SendGrid API key |
-| `NOTIFY_EMAIL_TO` | Recipient email |
-| `NOTIFY_EMAIL_FROM` | Verified sender email |
+| 1 | ~20 min |
+| 2 | ~40 min |
+| 3 | ~60 min |
+| 5 | ~100 min |
 
-### Workflow key settings
+GitHub free tier: 2,000 min/month. 5 accounts × 30 days ≈ 3,000 min — consider a paid plan or self-hosted runner for 5+ accounts.
+
+---
+
+## Schedule
+
+Runs automatically every day at **07:00 SAST / 05:00 UTC**.
+
+To change, edit `.github/workflows/nft_bot.yml`:
 ```yaml
-- cron: "23 3 * * *"        # 03:23 UTC = 05:23 SAST
-timeout-minutes: 120         # Covers up to ~5 accounts
-FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+- cron: "0 5 * * *"   # minute hour * * *
 ```
+[Cron expression helper](https://crontab.guru/)
 
-### System dependencies (Ubuntu 24.04 — do NOT use playwright install-deps)
-```yaml
-sudo apt-get install -y libasound2t64 libatk-bridge2.0-0 libatk1.0-0 
-  libcups2 libdbus-1-3 libdrm2 libgbm1 libgtk-3-0 libnspr4 libnss3
-  libx11-xcb1 libxcomposite1 libxdamage1 libxfixes3 libxkbcommon0 
-  libxrandr2 xvfb
-playwright install chromium   # browser only, no install-deps
-```
+**Note:** GitHub Actions scheduled runs can be delayed by up to 15–30 minutes during busy periods. This is normal. If the bot hasn't run by 07:30 SAST, trigger it manually via Actions → Run workflow.
+
+**Important:** GitHub automatically **disables scheduled workflows** on repos that have had no activity (commits, pushes) for **60 days**. To keep the schedule active, either make occasional commits or trigger manual runs.
 
 ---
 
-## Email Report (SendGrid)
+## GitHub Actions Workflow Notes
 
-Sent after all accounts complete. Per account:
-- Reservations at login
-- NFTs available at login
-- Reservations remaining after run
-- NFTs unsold after run
-- **Day income** (from `/person/myIncome`, not balance math)
-- Human-friendly failure reason if failed/skipped
-
-No totals across accounts in the email.
-
-### Daily report log file
-Written to `logs/account_N_report_YYYYMMDD.log`:
-```
-==================================================
-  ACCOUNT 1 — Daily Report
-  Date: 2026-05-27
-  Status: SUCCESS
-==================================================
-  Reservations at login:          2
-  NFTs available at login:        0
-  Reservations after run:         0
-  NFTs unsold after run:          0
-  Day income:                     $4.4728
-==================================================
-```
-
----
-
-## Timing Reference
-
-| Step | Duration |
-|---|---|
-| Login + popup | ~30s |
-| Opening stats collection | ~30s |
-| Per reservation wait (order processing) | up to 3 min |
-| Sell flow | ~1 min |
-| Between cycles | 2 min |
-| Settlement wait + income read | ~3 min |
-| **Per account (2 reservations)** | ~18–22 min |
-| **Per account (3 reservations)** | ~25–30 min |
-| **Two accounts** | ~40–50 min |
-
-GitHub free tier: 2,000 min/month. Two accounts daily ≈ 1,500 min/month — within free limits.
-
----
-
-## Troubleshooting
-
-| Symptom | Cause | Fix |
-|---|---|---|
-| Secrets missing despite being set | Old workflow with `RARBTC_USERNAME` (no `_1`) | Replace with new single-step workflow |
-| Bot ran twice in one log | Old dual-step workflow still in repo | Push new `nft_bot.yml` |
-| `ACCOUNT_COUNT` not read | Variable not set in GitHub Actions Variables | Settings → Variables → Actions → add `ACCOUNT_COUNT` |
-| Login fails | Wrong credentials or cookie popup not dismissed | Check secrets; `button.accept-btn` must exist |
-| `button.one-bt` not found | Reservations used up or countdown showing | Normal — check reservation count first |
-| Fund password not filled | PIN field not focused first | Click `div.van-password-input` before fill |
-| Sell popup `text='NFT Sale'` timeout | Site redirected to collection page | `sell_from_popup` force-navigates to `/nft/my` |
-| Income shows $0 or wrong | Balance math used instead of income page | Read from `/person/myIncome` → `div.info > div.num` |
-| Ubuntu `libasound2` error | Renamed in Ubuntu 24 | Use `libasound2t64`; never use `playwright install-deps` |
-| Session expired mid-run | Platform timeout | `ensure_logged_in()` checks URL and re-logins automatically |
-
----
-
-## Sharing & Forking
-
-### Make repo public → others fork it
-- Credentials are never in code — safe to make public
-- Fork users add their own secrets and `ACCOUNT_COUNT` variable
-- Fork users get updates by clicking **Sync fork → Update branch** on GitHub
-
-### Keep repo private → add collaborators
-- Settings → Collaborators → add by GitHub username
-- Collaborators can trigger runs and view logs but cannot see Secrets
+- `FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true` — required to suppress Node.js 20 deprecation warnings on current runners
+- `timeout-minutes: 120` — covers up to ~5 accounts with buffer
+- System dependencies installed manually due to Ubuntu 24.04 renaming `libasound2` → `libasound2t64`
+- All logs uploaded as artifacts after every run (pass or fail), retained 30 days
 
 ---
 
@@ -413,19 +303,150 @@ pip install -r requirements.txt
 playwright install chromium
 
 cp .env.example .env
-# Fill in: RARBTC_USERNAME_1, RARBTC_PASSWORD_1, RARBTC_RESERVATION_PASSWORD_1
-# Also set: ACCOUNT_COUNT=1
+# Fill in your values — use _1 suffix: RARBTC_USERNAME_1 etc.
 
 python bot.py
 ```
 
-Logs written to `logs/` folder locally.
+---
+
+## Troubleshooting
+
+| Symptom | Cause | Fix |
+|---|---|---|
+| Scheduled run didn't fire | GitHub delay or disabled workflow | Trigger manually; check Actions tab for disabled warning |
+| Login fails | Wrong credentials | Re-check GitHub Secrets |
+| `button.one-bt` not found | 0 reservations left today | Normal — bot skips to sell check |
+| Fund password popup not found | Reservation click failed or overlay blocking | Check error screenshot |
+| Confirmation popup timeout | Server slow / order failed | Bot saves HTML — check selectors |
+| Session expired mid-run | Platform timeout | Bot auto re-logins |
+| `libasound2` install error | Ubuntu 24.04 renamed package | Already fixed — installs `libasound2t64` |
+| `AttributeError` on method | Stale bot.py in repo | Force push: `git push --force` |
+| Account skipped | Missing GitHub Secrets | Add `RARBTC_USERNAME_N` etc. for that account |
+| Bot ran but no trades | 0 reservations + 0 NFTs | Normal if already completed today |
 
 ---
 
-## Security
+## Security Summary
 
-- All credentials stored as GitHub Secrets — encrypted, never in any committed file
-- `.env` is in `.gitignore` — never committed
-- Screenshots never capture credential fields (fields are filled, not visible in headless mode)
-- See `SECURITY.md` for full policy
+- Credentials stored as **GitHub Secrets** — encrypted, never in code or logs
+- `.env` blocked by `.gitignore` — never committed
+- Safe to make repo public — no credentials in any committed file
+- Others can fork and add their own secrets independently
+- See `SECURITY.md` for full security policy
+
+---
+
+## Sharing the Repo
+
+### Option A — Others manage their own bot (recommended)
+1. Make repo **Public**
+2. Share the link
+3. Others **Fork** it → add their own secrets → enable Actions
+
+### Option B — You manage bot for others
+1. Keep repo **Private**
+2. Add them as **Collaborator** (Settings → Collaborators)
+3. They can trigger runs and view logs but cannot see your Secrets
+
+---
+
+## Email Notifications (Daily Report)
+
+After all accounts complete their daily run, the bot sends a single email report via **SendGrid**.
+
+### What the email includes
+
+Per account:
+- Reservations available at login
+- NFTs available to sell at login
+- Account balance at login
+- Reservations remaining after run
+- NFTs unsold after run
+- Account balance after run
+- **Day income** (balance end − balance start)
+- Human-friendly failure reason (if the account failed or was skipped)
+
+Summary:
+- **Total day income** across all accounts
+
+### Setup
+
+**Step 1 — Create a SendGrid account**
+1. Go to [sendgrid.com](https://sendgrid.com) → sign up (free tier = 100 emails/day)
+2. Settings → API Keys → Create API Key → Full Access
+3. Copy the key — it only shows once
+4. Settings → Sender Authentication → Single Sender Verification → verify your sending email address
+
+**Step 2 — Add three GitHub Secrets**
+
+Go to repo → **Settings → Secrets and variables → Actions → New repository secret**:
+
+| Secret | Value |
+|---|---|
+| `SENDGRID_API_KEY` | Your SendGrid API key |
+| `NOTIFY_EMAIL_TO` | Email address to receive the daily report |
+| `NOTIFY_EMAIL_FROM` | Verified sender email (e.g. `rarbtcbot@domain.com`) |
+
+**Email notifications are optional.** If these secrets are not set, the bot logs a note and continues running normally — it will not fail.
+
+### Email report format
+
+```
+Rarzz NFT Bot — Daily Report
+2026-05-14 | 08:05 UTC
+
+Account 1                               SUCCESS
+─────────────────────────────────────────────
+Reservations at login              2
+NFTs available at login            0
+Balance at login                   325.9100 USDT
+Reservations remaining after run   0
+NFTs unsold after run              0
+Balance after run                  330.1500 USDT
+Day income                         +4.2400 USDT
+
+Account 2                               SUCCESS
+─────────────────────────────────────────────
+...
+
+Total Day Income across all accounts:  +8.4800 USDT
+```
+
+If an account fails:
+```
+Account 3                               FAILED
+─────────────────────────────────────────────
+...
+Issue: Reservation was placed but no confirmation appeared within 3 minutes.
+```
+
+If secrets are missing for an account:
+```
+Account 4                               SKIPPED
+─────────────────────────────────────────────
+Issue: Missing GitHub Secrets: RARBTC_USERNAME_4, RARBTC_PASSWORD_4
+```
+
+### Daily report log file
+
+In addition to the email, each account also writes a **separate human-readable report log file** into the `logs/` artifact after every run:
+
+```
+logs/
+├── account_1_report_20260514.log
+├── account_2_report_20260514.log
+└── ...
+```
+
+The report log contains:
+- Reservations at login
+- NFTs available at login
+- Reservations remaining after run
+- NFTs unsold after run
+- **Day income** (no totals, no balances — income only)
+- Human-friendly failure reason if anything went wrong
+
+This file is designed to be a clean, simple daily summary — no raw numbers or debug info. One file per account per day.
+
+> **Note for fork users:** When the upstream repo is updated (new features, bug fixes), your fork does not update automatically. To get the latest version, go to your forked repo on GitHub and click **"Sync fork" → "Update branch"**. Your GitHub Secrets are never affected by syncing.

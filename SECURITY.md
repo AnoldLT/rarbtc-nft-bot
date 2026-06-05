@@ -1,29 +1,95 @@
 # Security Policy
 
-## Credential storage
+## Credential Safety
 
-All credentials (login email, password, fund/PIN password) are stored exclusively as **GitHub Secrets** when deployed via GitHub Actions. They are:
+This project is designed so that **no credentials ever appear in the codebase**.
 
+All sensitive values are stored exclusively as **GitHub Secrets** or **GitHub Actions Variables**, which are:
 - Encrypted at rest by GitHub
-- Never printed in workflow logs
-- Never committed to the repository in any file
-- Not visible to collaborators (only repository admins can manage secrets)
+- Never visible in logs, code, or to collaborators
+- Injected as environment variables only at runtime
+- Automatically redacted if accidentally printed to logs
 
-The `.env` file used for local development is listed in `.gitignore` and must never be committed.
+### What is safe to share or make public
 
-## What is safe to commit / make public
+| File | Safe to share | Reason |
+|---|---|---|
+| `bot.py` | ✅ Yes | Reads credentials from environment only |
+| `nft_bot.yml` | ✅ Yes | References secret names only, not values |
+| `README.md` | ✅ Yes | No credentials |
+| `SECURITY.md` | ✅ Yes | No credentials |
+| `.env.example` | ✅ Yes | Template only, no real values |
+| `.env` | ❌ Never | Contains real credentials — blocked by `.gitignore` |
+| `logs/` | ⚠️ Caution | May contain account activity — kept local only |
 
-- `bot.py` — contains no credentials; reads everything from environment variables
-- `requirements.txt` — dependency list only
-- `.env.example` — template with placeholder values only
-- `.gitignore` — blocks `.env` and logs
-- `.github/workflows/nft_bot.yml` — workflow config; credentials injected at runtime from Secrets
-- `README.md`, `SECURITY.md` — documentation
+---
 
-## Local development
+## For Repository Owners
 
-When running locally, create a `.env` file from `.env.example`. This file is git-ignored and must not be shared or pushed.
+### Before making your repo public
+- Run `git log --all --full-history -- .env` — if it returns nothing, your `.env` was never committed
+- Run `git grep -i "password\|secret\|token"` — ensure no hardcoded credentials exist
+- Confirm `.gitignore` includes `.env`, `logs/`, and `*.png`
 
-## Reporting a vulnerability
+### GitHub Secrets management
+- Secrets are set under **Settings → Secrets and variables → Actions**
+- Never paste secret values into issues, pull requests, or commit messages
+- Rotate credentials immediately if you suspect exposure
+- Remove secrets for accounts that are no longer in use
 
-If you discover a security issue in this project, please open a GitHub Issue or contact the repository owner directly.
+### Collaborator access
+- Collaborators can trigger workflow runs and view logs but **cannot read your Secrets**
+- Only grant collaborator access to trusted individuals
+- Review collaborators regularly under **Settings → Collaborators**
+
+---
+
+## For Users Forking This Repository
+
+When you fork this project:
+1. You get a clean copy with **no credentials** — the original owner's secrets do not transfer
+2. You must add your own secrets under your fork's **Settings → Secrets and variables → Actions**
+3. Set your own `ACCOUNT_COUNT` variable under **Settings → Variables → Actions**
+4. Your credentials are entirely separate from the original repo
+
+### Required secrets per account
+For each account numbered `N`:
+```
+RARBTC_USERNAME_N
+RARBTC_PASSWORD_N
+RARBTC_RESERVATION_PASSWORD_N
+```
+
+---
+
+## Reporting a Security Issue
+
+If you discover a security vulnerability in this project — such as a code path that could expose credentials or allow unauthorized access — please:
+
+1. **Do not open a public GitHub Issue**
+2. Contact the repository owner directly and privately
+3. Provide a clear description of the vulnerability and steps to reproduce
+4. Allow reasonable time for the issue to be fixed before any public disclosure
+
+---
+
+## What This Bot Does Not Do
+
+To be transparent about the bot's scope:
+
+- Does **not** store, transmit, or log your credentials anywhere outside GitHub's encrypted secrets vault
+- Does **not** make any transactions beyond what is described in the README (NFT reservation and sale on rarbtc.com)
+- Does **not** access any data beyond what is needed to perform the automation
+- Does **not** run any code from external sources at runtime
+
+---
+
+## Disclaimer
+
+This bot automates actions on rarbtc.com on behalf of the account owner. Users are responsible for:
+- Ensuring their use complies with rarbtc.com's terms of service
+- Securing their own GitHub account (enable 2FA)
+- Rotating credentials if they suspect compromise
+- Reviewing the bot's actions via the daily log artifacts
+
+The authors of this project take no responsibility for financial loss, account suspension, or any other consequences arising from the use of this automation.
