@@ -310,11 +310,12 @@ class RarbtcBot:
             self.log.warning("Fund password popup did not appear")
             return
 
-        # Focus PIN field then fill hidden input
-        self.page.locator("div.van-password-input").click(timeout=5_000)
-        time.sleep(1)
-        self.page.locator("div.pw input[type='text']").fill(self.reservation_password)
-        self.log.info("Fund password filled")
+        # Fill PIN directly into the hidden input — click on div is blocked by the input itself
+        pin_input = self.page.locator("div.pw input[type='text']")
+        pin_input.wait_for(timeout=10_000)
+        pin_input.click(timeout=5_000)
+        time.sleep(0.5)
+        pin_input.fill(self.reservation_password)
 
         # Confirm
         self.page.locator("button.van-button--primary").click(timeout=10_000)
