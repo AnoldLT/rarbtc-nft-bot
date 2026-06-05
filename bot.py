@@ -1,7 +1,7 @@
 """
 rarbtc.com NFT Trading Automation Bot
-Performs up to 2 buy-sell cycles per day, fully headless via Playwright.
-Credentials are loaded from environment variables — never hardcoded..
+Cycle count is determined live from the platform's reservations available today.
+Credentials are loaded from environment variables — never hardcoded.
 """
 
 import os
@@ -38,7 +38,6 @@ EMAIL_ENABLED     = bool(SENDGRID_API_KEY and NOTIFY_EMAIL_TO and NOTIFY_EMAIL_F
 BASE_URL         = "https://rarbtc.com"
 RESERVATION_URL  = f"{BASE_URL}/nft/reservation"
 MY_NFTS_URL      = f"{BASE_URL}/nft/my"
-MAX_CYCLES       = 2          # platform allows 2 buys/sells per 24 h
 MAX_RETRIES      = 3
 RETRY_DELAY_S    = 10
 POPUP_TIMEOUT_MS = 180_000    # 3 minutes for order popup
@@ -685,8 +684,8 @@ class RarbtcBot:
                 except Exception:
                     time.sleep(5)
 
-    def run_cycle(self, cycle_num: int) -> None:
-        self.log.info("=== Starting cycle %d/%d ===", cycle_num, MAX_CYCLES)
+    def run_cycle(self, cycle_num: int, total_cycles: int) -> None:
+        self.log.info("=== Starting cycle %d/%d ===", cycle_num, total_cycles)
 
         self.ensure_logged_in()
 
@@ -733,7 +732,7 @@ class RarbtcBot:
             self.ensure_logged_in()
             retry(self.sell_from_popup, label=f"Cycle{cycle_num}:SellPopup")
 
-        self.log.info("=== Cycle %d complete. ===", cycle_num)
+        self.log.info("=== Cycle %d/%d complete. ===", cycle_num, total_cycles)
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -914,17 +913,23 @@ def run_account(account_num: int) -> dict:
         try:
             retry(bot.login, label="Login")
 
-            # ── Collect opening stats ──────────────────────────────────────
+            # ── Collect opening stats + determine cycle count ──────────────
+            cycles_to_run = 0
             try:
-                summary["reservations_start"] = bot.get_reservations_available()
+                cycles_to_run = bot.get_reservations_available()
+                summary["reservations_start"] = cycles_to_run
                 bot.page.goto(MY_NFTS_URL, wait_until="domcontentloaded")
                 time.sleep(10)
                 summary["nfts_start"] = bot._get_nft_total_number()
             except Exception as e:
                 acct_logger.warning("Could not collect opening stats: %s", e)
 
-            for cycle in range(1, MAX_CYCLES + 1):
-                bot.run_cycle(cycle)
+            if cycles_to_run == 0:
+                acct_logger.info("No reservations available today — skipping cycles.")
+            else:
+                acct_logger.info("Reservations available: %d — running %d cycle(s).", cycles_to_run, cycles_to_run)
+                for cycle in range(1, cycles_to_run + 1):
+                    bot.run_cycle(cycle, cycles_to_run)
 
             # ── Collect closing stats ──────────────────────────────────────
             try:
@@ -966,7 +971,7 @@ def run_account(account_num: int) -> dict:
                 acct_logger.warning("Could not collect closing stats: %s", e)
 
             summary["status"] = "SUCCESS"
-            acct_logger.info("Account %d — All %d cycles completed successfully.", account_num, MAX_CYCLES)
+            acct_logger.info("Account %d — All %d cycle(s) completed successfully.", account_num, cycles_to_run)
             return summary
 
         except Exception as exc:
