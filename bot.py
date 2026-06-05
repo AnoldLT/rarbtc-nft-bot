@@ -477,7 +477,9 @@ def run_account(account_num: int) -> dict:
 
             # Wait for settlement before reading income
             if nfts_after > 0:
-                logger.info("NFTs still present — waiting 2 min for sales to settle")
+                logger.info("NFTs still present — attempting final sell before settlement wait")
+                bot.sell_from_my_nfts()
+                logger.info("Waiting 2 min for sales to settle")
                 time.sleep(120)
                 nfts_after = bot.get_nfts_available()
                 summary["nfts_after"] = nfts_after
