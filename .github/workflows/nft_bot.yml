@@ -1,47 +1,33 @@
-# ─────────────────────────────────────────────────────────────────
-#  GitHub Actions Workflow
-#  Runs the rarbtc.com NFT bot daily for N accounts sequentially.
-#  ACCOUNT_COUNT is a GitHub Actions Variable (not a Secret).
-#  Credentials are stored as GitHub Secrets — never in code.
-#  Author: ALT
-# ─────────────────────────────────────────────────────────────────
-
-name: NFT Bot Daily Run
+name: Rarzz NFT Bot
 
 on:
   schedule:
-    - cron: "23 3 * * *"   # Every day at 03:23 UTC (05:23 SAST / UTC+2)
-  workflow_dispatch:        # Also allows manual trigger from GitHub UI
+    - cron: "23 3 * * *"   # 03:23 UTC = 05:23 SAST
+  workflow_dispatch:         # Allow manual trigger from GitHub UI
 
 env:
   FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
 
 jobs:
   run-bot:
-    name: Run rarbtc NFT Bot
-    runs-on: ubuntu-latest
-    timeout-minutes: 120    # 2 hours — covers up to ~5 accounts
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120    # Covers up to ~5 accounts
 
     steps:
-      # 1. Check out the repository
       - name: Checkout repository
-        uses: actions/checkout@v4.2.2
+        uses: actions/checkout@v4
 
-      # 2. Set up Python
       - name: Set up Python 3.11
-        uses: actions/setup-python@v5.6.0
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-          cache: "pip"
 
-      # 3. Install Python dependencies
       - name: Install Python dependencies
         run: pip install -r requirements.txt
 
-      # 4. Install system dependencies (Ubuntu 24.04 compatible)
-      - name: Install system dependencies for Chromium
+      - name: Install system dependencies (Ubuntu 24.04 — NOT playwright install-deps)
         run: |
-          sudo apt-get update
+          sudo apt-get update -qq
           sudo apt-get install -y \
             libasound2t64 \
             libatk-bridge2.0-0 \
@@ -61,54 +47,42 @@ jobs:
             libxrandr2 \
             xvfb
 
-      # 5. Install Playwright Chromium
-      - name: Install Playwright Chromium browser
+      - name: Install Playwright Chromium (browser only)
         run: playwright install chromium
 
-      # 6. Create logs directory
-      - name: Create logs directory
-        run: mkdir -p logs
-
-      # 7. Run the bot — loops through all accounts internally via ACCOUNT_COUNT
       - name: Run NFT bot
         env:
-          ACCOUNT_COUNT:                    ${{ vars.ACCOUNT_COUNT }}
-          RARBTC_USERNAME_1:                ${{ secrets.RARBTC_USERNAME_1 }}
-          RARBTC_PASSWORD_1:                ${{ secrets.RARBTC_PASSWORD_1 }}
-          RARBTC_RESERVATION_PASSWORD_1:    ${{ secrets.RARBTC_RESERVATION_PASSWORD_1 }}
-          RARBTC_USERNAME_2:                ${{ secrets.RARBTC_USERNAME_2 }}
-          RARBTC_PASSWORD_2:                ${{ secrets.RARBTC_PASSWORD_2 }}
-          RARBTC_RESERVATION_PASSWORD_2:    ${{ secrets.RARBTC_RESERVATION_PASSWORD_2 }}
-          RARBTC_USERNAME_3:                ${{ secrets.RARBTC_USERNAME_3 }}
-          RARBTC_PASSWORD_3:                ${{ secrets.RARBTC_PASSWORD_3 }}
-          RARBTC_RESERVATION_PASSWORD_3:    ${{ secrets.RARBTC_RESERVATION_PASSWORD_3 }}
-          RARBTC_USERNAME_4:                ${{ secrets.RARBTC_USERNAME_4 }}
-          RARBTC_PASSWORD_4:                ${{ secrets.RARBTC_PASSWORD_4 }}
-          RARBTC_RESERVATION_PASSWORD_4:    ${{ secrets.RARBTC_RESERVATION_PASSWORD_4 }}
-          RARBTC_USERNAME_5:                ${{ secrets.RARBTC_USERNAME_5 }}
-          RARBTC_PASSWORD_5:                ${{ secrets.RARBTC_PASSWORD_5 }}
-          RARBTC_RESERVATION_PASSWORD_5:    ${{ secrets.RARBTC_RESERVATION_PASSWORD_5 }}
-          SENDGRID_API_KEY:                 ${{ secrets.SENDGRID_API_KEY }}
-          NOTIFY_EMAIL_TO:                  ${{ secrets.NOTIFY_EMAIL_TO }}
-          NOTIFY_EMAIL_FROM:                ${{ secrets.NOTIFY_EMAIL_FROM }}
+          ACCOUNT_COUNT: ${{ vars.ACCOUNT_COUNT }}
+          # Account 1
+          RARBTC_USERNAME_1: ${{ secrets.RARBTC_USERNAME_1 }}
+          RARBTC_PASSWORD_1: ${{ secrets.RARBTC_PASSWORD_1 }}
+          RARBTC_RESERVATION_PASSWORD_1: ${{ secrets.RARBTC_RESERVATION_PASSWORD_1 }}
+          # Account 2
+          RARBTC_USERNAME_2: ${{ secrets.RARBTC_USERNAME_2 }}
+          RARBTC_PASSWORD_2: ${{ secrets.RARBTC_PASSWORD_2 }}
+          RARBTC_RESERVATION_PASSWORD_2: ${{ secrets.RARBTC_RESERVATION_PASSWORD_2 }}
+          # Account 3
+          RARBTC_USERNAME_3: ${{ secrets.RARBTC_USERNAME_3 }}
+          RARBTC_PASSWORD_3: ${{ secrets.RARBTC_PASSWORD_3 }}
+          RARBTC_RESERVATION_PASSWORD_3: ${{ secrets.RARBTC_RESERVATION_PASSWORD_3 }}
+          # Account 4
+          RARBTC_USERNAME_4: ${{ secrets.RARBTC_USERNAME_4 }}
+          RARBTC_PASSWORD_4: ${{ secrets.RARBTC_PASSWORD_4 }}
+          RARBTC_RESERVATION_PASSWORD_4: ${{ secrets.RARBTC_RESERVATION_PASSWORD_4 }}
+          # Account 5
+          RARBTC_USERNAME_5: ${{ secrets.RARBTC_USERNAME_5 }}
+          RARBTC_PASSWORD_5: ${{ secrets.RARBTC_PASSWORD_5 }}
+          RARBTC_RESERVATION_PASSWORD_5: ${{ secrets.RARBTC_RESERVATION_PASSWORD_5 }}
+          # Email
+          SENDGRID_API_KEY: ${{ secrets.SENDGRID_API_KEY }}
+          NOTIFY_EMAIL_TO: ${{ secrets.NOTIFY_EMAIL_TO }}
+          NOTIFY_EMAIL_FROM: ${{ secrets.NOTIFY_EMAIL_FROM }}
         run: python bot.py
 
-      # 8. Upload all account logs
-      - name: Upload run logs
+      - name: Upload logs
         if: always()
-        uses: actions/upload-artifact@v4.6.2
+        uses: actions/upload-artifact@v4
         with:
           name: bot-logs-${{ github.run_id }}
           path: logs/
           retention-days: 30
-          if-no-files-found: warn
-
-      # 9. Upload error screenshots
-      - name: Upload error screenshots (if any)
-        if: always()
-        uses: actions/upload-artifact@v4.6.2
-        with:
-          name: error-screenshots-${{ github.run_id }}
-          path: logs/*.png
-          retention-days: 30
-          if-no-files-found: ignore

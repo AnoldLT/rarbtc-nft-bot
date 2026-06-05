@@ -1,21 +1,27 @@
-# ── Credentials — NEVER commit these ──────────────────────────────
+# Credentials — never commit
 .env
 
-# ── Runtime logs & screenshots ────────────────────────────────────
+# Logs and screenshots
 logs/
+*.log
 *.png
+*.jpg
 
-# ── Python cache ──────────────────────────────────────────────────
+# Python
 __pycache__/
 *.py[cod]
 *.pyo
-.pytest_cache/
-
-# ── Virtual environments ──────────────────────────────────────────
+*.pyd
 venv/
 .venv/
-env/
+*.egg-info/
+dist/
+build/
 
-# ── OS files ──────────────────────────────────────────────────────
+# Playwright
+playwright-report/
+test-results/
+
+# OS
 .DS_Store
 Thumbs.db
