@@ -181,7 +181,7 @@ class RarbtcBot:
         self._goto("/nft/my")
         self._close_popup()
         try:
-            buttons = self.page.locator("button[data-v-5055aed9]").all()
+            buttons = self._sell_buttons()
             count = len(buttons)
             self.log.info(f"NFTs available (sell buttons): {count}")
             return count
@@ -192,9 +192,23 @@ class RarbtcBot:
     def _get_nft_total_number(self) -> int:
         """Count sell buttons on current page (must already be on /nft/my)."""
         try:
-            return len(self.page.locator("button[data-v-5055aed9]").all())
+            return len(self._sell_buttons())
         except Exception:
             return 0
+
+    def _sell_buttons(self):
+        """Return all sell NFT buttons — tries multiple selectors for different page states."""
+        # Primary selector confirmed from live HTML
+        buttons = self.page.locator("button[data-v-5055aed9]").all()
+        if buttons:
+            return buttons
+        # Fallback: black "Sell NFT" button visible in reservation zone tab
+        buttons = self.page.get_by_role("button", name="Sell NFT").all()
+        if buttons:
+            return buttons
+        # Fallback: any button containing sell NFT text
+        buttons = self.page.locator("button", has_text="Sell NFT").all()
+        return buttons
 
     def get_today_reservation_income(self) -> str:
         """Read day income from /person/myIncome."""
@@ -217,12 +231,25 @@ class RarbtcBot:
     # Sell helpers
     # -----------------------------------------------------------------------
 
+    def _activate_reservation_zone_tab(self):
+        """Click the NFT in Reservation Zone sub-tab on /nft/my if present."""
+        try:
+            tab = self.page.get_by_text("NFT in Reservation Zone", exact=True)
+            tab.wait_for(timeout=5_000)
+            tab.click()
+            self.log.info("Activated NFT in Reservation Zone tab")
+            time.sleep(2)
+        except Exception:
+            pass  # Tab not present or already active
+
     def sell_from_my_nfts(self):
         """Sell all NFTs on /nft/my. Reloads page each attempt to clear stuck popups."""
         self.log.info("Selling NFTs from /nft/my")
 
         max_attempts = 10
         attempt = 0
+        prev_count = None
+
         while attempt < max_attempts:
             attempt += 1
 
@@ -231,12 +258,27 @@ class RarbtcBot:
             self._close_popup()
             time.sleep(2)
 
+            # Activate reservation zone sub-tab — reserved NFTs live here
+            self._activate_reservation_zone_tab()
+
             buttons = self.page.locator("button[data-v-5055aed9]").all()
-            if not buttons:
+            count = len(buttons)
+
+            if count == 0:
                 self.log.info("No sell buttons found — done selling")
                 break
 
-            self.log.info(f"Sell attempt {attempt} — {len(buttons)} sell button(s) visible")
+            self.log.info(f"Sell attempt {attempt} — {count} sell button(s) visible")
+
+            # If count hasn't decreased since last attempt, NFT is likely in pending sell state
+            # Back off and wait 30s before retrying — don't spam confirm on same pending NFT
+            if prev_count is not None and count >= prev_count:
+                self.log.info(f"NFT count unchanged ({count}) — backing off 30s before retry")
+                time.sleep(30)
+                prev_count = count
+                continue
+
+            prev_count = count
 
             try:
                 buttons[0].click(timeout=10_000)
@@ -246,25 +288,25 @@ class RarbtcBot:
                 self.page.get_by_text("NFT Sale", exact=True).wait_for(timeout=20_000)
                 self.log.info("NFT Sale popup appeared")
 
-                # Confirm sell
+                # Click Sell NFT inside popup
                 self.page.locator("button.van-button--primary").click(timeout=10_000)
-                self.log.info("Confirmed sell — waiting 10s for processing")
-                time.sleep(10)
+                self.log.info("Clicked Sell NFT in popup — waiting for success confirmation")
 
-                # Dismiss any remaining popup (success or I understand)
-                try:
-                    self.page.locator("button.van-button--primary").click(timeout=3_000)
-                    self.log.info("Dismissed post-sell popup")
-                except Exception:
-                    pass
+                # Wait for success popup — must click I understand before ANY reload
+                self.page.get_by_text("Selling application submitted successfully", exact=False).wait_for(timeout=60_000)
+                self.log.info("Success popup appeared — clicking I understand")
 
+                # Click I understand — this is what moves NFT to On Sale state
+                self.page.locator("button.van-button--primary").click(timeout=10_000)
+                self.log.info("Clicked I understand — NFT now in On Sale state")
+
+                time.sleep(5)
                 self._close_popup()
                 time.sleep(3)
                 # Loop continues — next iteration reloads /nft/my and recounts
 
             except PlaywrightTimeoutError as e:
                 self.log.warning(f"Sell attempt {attempt} timeout: {e}")
-                # Don't break — reload and retry
                 continue
             except Exception as e:
                 self.log.warning(f"Sell attempt {attempt} error: {e}")
@@ -348,8 +390,9 @@ class RarbtcBot:
     # -----------------------------------------------------------------------
 
     def sell_from_popup(self):
-        """Force navigate to /nft/my and sell. Reuses sell_from_my_nfts for consistency."""
+        """Force navigate to /nft/my and sell. Delegates to sell_from_my_nfts."""
         self.log.info("sell_from_popup: delegating to sell_from_my_nfts")
+        # Always force-navigate to /nft/my — site may have redirected to reservation/list
         self.sell_from_my_nfts()
 
         # 2-minute pause between cycles
