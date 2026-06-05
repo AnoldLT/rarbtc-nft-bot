@@ -218,20 +218,28 @@ class RarbtcBot:
     # -----------------------------------------------------------------------
 
     def sell_from_my_nfts(self):
-        """Navigate to /nft/my and sell all available NFTs."""
+        """Sell all NFTs on /nft/my. Reloads page each attempt to clear stuck popups."""
         self.log.info("Selling NFTs from /nft/my")
-        self._goto("/nft/my")
-        self._close_popup()
 
-        while True:
+        max_attempts = 10
+        attempt = 0
+        while attempt < max_attempts:
+            attempt += 1
+
+            # Fresh page load every attempt — clears any stuck popup from previous attempt
+            self._goto("/nft/my")
+            self._close_popup()
+            time.sleep(2)
+
             buttons = self.page.locator("button[data-v-5055aed9]").all()
             if not buttons:
                 self.log.info("No sell buttons found — done selling")
                 break
 
-            btn = buttons[0]
+            self.log.info(f"Sell attempt {attempt} — {len(buttons)} sell button(s) visible")
+
             try:
-                btn.click(timeout=10_000)
+                buttons[0].click(timeout=10_000)
                 self.log.info("Clicked sell button")
 
                 # Wait for NFT Sale popup
@@ -240,30 +248,29 @@ class RarbtcBot:
 
                 # Confirm sell
                 self.page.locator("button.van-button--primary").click(timeout=10_000)
-                self.log.info("Confirmed sell in popup")
+                self.log.info("Confirmed sell — waiting 10s for processing")
+                time.sleep(10)
 
-                # Wait for success
-                self.page.get_by_text(
-                    "Selling application submitted successfully", exact=False
-                ).wait_for(timeout=20_000)
-                self.log.info("Sell submitted successfully")
-
-                # Click I understand — auto-closes sometimes
+                # Dismiss any remaining popup (success or I understand)
                 try:
-                    self.page.locator("button.van-button--primary").click(timeout=5_000)
-                    self.log.info("Clicked I understand")
+                    self.page.locator("button.van-button--primary").click(timeout=3_000)
+                    self.log.info("Dismissed post-sell popup")
                 except Exception:
-                    self.log.info("I understand button auto-closed — OK")
+                    pass
 
-                time.sleep(3)
                 self._close_popup()
+                time.sleep(3)
+                # Loop continues — next iteration reloads /nft/my and recounts
 
             except PlaywrightTimeoutError as e:
-                self.log.warning(f"Sell flow timeout: {e}")
-                break
+                self.log.warning(f"Sell attempt {attempt} timeout: {e}")
+                # Don't break — reload and retry
+                continue
             except Exception as e:
-                self.log.warning(f"Sell error: {e}")
-                break
+                self.log.warning(f"Sell attempt {attempt} error: {e}")
+                continue
+        else:
+            self.log.warning("Max sell attempts reached")
 
     def ensure_no_nfts_before_reserve(self):
         """If NFTs exist on /nft/my, sell them before reserving."""
@@ -310,12 +317,12 @@ class RarbtcBot:
             self.log.warning("Fund password popup did not appear")
             return
 
-        # Fill PIN directly into the hidden input — click on div is blocked by the input itself
+        # Click the input directly — clicking parent div is blocked by the input intercepting events
         pin_input = self.page.locator("div.pw input[type='text']")
-        pin_input.wait_for(timeout=10_000)
         pin_input.click(timeout=5_000)
         time.sleep(0.5)
         pin_input.fill(self.reservation_password)
+        self.log.info("Fund password filled")
 
         # Confirm
         self.page.locator("button.van-button--primary").click(timeout=10_000)
@@ -341,44 +348,9 @@ class RarbtcBot:
     # -----------------------------------------------------------------------
 
     def sell_from_popup(self):
-        """Force navigate to /nft/my and sell (ignoring any site redirect)."""
-        self.log.info("sell_from_popup: force navigating to /nft/my")
-        self._goto("/nft/my")
-        self._close_popup()
-
-        try:
-            btn = self.page.locator("button[data-v-5055aed9]").first
-            btn.wait_for(timeout=15_000)
-            btn.click(timeout=10_000)
-            self.log.info("Clicked sell button on /nft/my")
-
-            # Wait for NFT Sale popup
-            self.page.get_by_text("NFT Sale", exact=True).wait_for(timeout=20_000)
-            self.log.info("NFT Sale popup appeared")
-
-            # Confirm sell
-            self.page.locator("button.van-button--primary").click(timeout=10_000)
-            self.log.info("Confirmed sell in popup")
-
-            # Wait for success
-            self.page.get_by_text(
-                "Selling application submitted successfully", exact=False
-            ).wait_for(timeout=20_000)
-            self.log.info("Selling application submitted successfully")
-
-            # I understand — may auto-close
-            try:
-                self.page.locator("button.van-button--primary").click(timeout=5_000)
-                self.log.info("Clicked I understand")
-            except Exception:
-                self.log.info("I understand auto-closed — OK")
-
-            time.sleep(10)
-
-        except PlaywrightTimeoutError as e:
-            self.log.warning(f"sell_from_popup timeout: {e}")
-        except Exception as e:
-            self.log.warning(f"sell_from_popup error: {e}")
+        """Force navigate to /nft/my and sell. Reuses sell_from_my_nfts for consistency."""
+        self.log.info("sell_from_popup: delegating to sell_from_my_nfts")
+        self.sell_from_my_nfts()
 
         # 2-minute pause between cycles
         self.log.info("Sleeping 2 min between cycles")
