@@ -21,6 +21,14 @@ try:
 except ImportError:
     SENDGRID_AVAILABLE = False
 
+# ── Telegram notifications (optional) ─────────────────────────────────────
+try:
+    from telegram import Bot
+    from telegram.error import TelegramError
+    TELEGRAM_AVAILABLE = True
+except ImportError:  # pragma: no cover
+    TELEGRAM_AVAILABLE = False
+
 # ── Load environment variables ────────────────────────────────────────────────
 load_dotenv()
 
@@ -838,6 +846,62 @@ def send_run_notification(all_account_summaries: list) -> None:
         log.warning("Failed to send email notification: %s", e)
 
 
+def send_telegram_notification(all_summaries: list) -> None:
+    """
+    Send a single Telegram message after all accounts have been processed.
+    Mirrors the content of the email report but formatted for Telegram.
+    Silently skips if Telegram is not configured.
+    """
+    if not TELEGRAM_AVAILABLE:
+        return
+
+    token = os.environ.get("TELEGRAM_BOT_TOKEN", "")
+    chat_id = os.environ.get("TELEGRAM_CHAT_ID", "")
+    if not (token and chat_id):
+        log.info("Telegram notifications not configured — skipping. "
+                 "Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID to enable.")
+        return
+
+    run_date = datetime.utcnow().strftime("%Y-%m-%d")
+    run_time = datetime.utcnow().strftime("%H:%M UTC")
+
+    # Build the message text (Telegram supports MarkdownV2; we keep it simple plain text)
+    lines = [
+        f"*Rarzz NFT Bot — Daily Report*",
+        f"{run_date} | {run_time}",
+        ""  # blank line
+    ]
+
+    for s in all_summaries:
+        status_emoji = "✅" if s["status"] == "SUCCESS" else ("❌" if s["status"] == "FAILED" else "⚠️")
+        lines.append(f"*Account {s['account_num']}* {status_emoji} `{s['status']}`")
+        lines.append(f"  Reservations at login:      {s.get('reservations_start', 'N/A')}")
+        lines.append(f"  NFTs available at login:    {s.get('nfts_start', 'N/A')}")
+        lines.append(f"  Reservations after run:     {s.get('reservations_end', 'N/A')}")
+        lines.append(f"  NFTs unsold after run:      {s.get('nfts_end', 'N/A')}")
+        income = s.get("day_income", "N/A")
+        # colour is not needed in plain text; just show the value
+        lines.append(f"  Day income:                 {income}")
+        if s.get("failure_reason"):
+            lines.append(f"  ⚠️ Issue: {s['failure_reason']}")
+        lines.append("")  # separator between accounts
+
+    # Optional total across accounts (you can compute if you wish)
+    # total_income = sum(float(s.get("day_income", "0") or 0) for s in all_summaries if s.get("day_income", "N/A") != "N/A")
+    # lines.append(f"*Total Day Income:* {total_income:.4f} USDT")
+
+    message = "\n".join(lines)
+
+    try:
+        bot = Bot(token=token)
+        bot.send_message(chat_id=chat_id, text=message, parse_mode="MarkdownV2")
+        log.info("Telegram notification sent to chat %s", chat_id)
+    except TelegramError as exc:
+        log.warning("Failed to send Telegram notification: %s", exc)
+    except Exception as exc:  # pragma: no cover
+        log.warning("Unexpected error while sending Telegram notification: %s", exc)
+
+
 def run_account(account_num: int) -> dict:
     """
     Run the full bot flow for a single account.
@@ -1092,6 +1156,8 @@ def main() -> None:
 
     # Send email notification after all accounts are done
     send_run_notification(all_summaries)
+    # Send Telegram notification after all accounts are done
+    send_telegram_notification(all_summaries)
     log.info("Run finished at %s UTC.", datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S"))
 
 

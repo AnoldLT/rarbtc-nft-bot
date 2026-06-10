@@ -91,6 +91,8 @@ jobs:
           SENDGRID_API_KEY:                 ${{ secrets.SENDGRID_API_KEY }}
           NOTIFY_EMAIL_TO:                  ${{ secrets.NOTIFY_EMAIL_TO }}
           NOTIFY_EMAIL_FROM:                ${{ secrets.NOTIFY_EMAIL_FROM }}
+          TELEGRAM_BOT_TOKEN:               ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID:                 ${{ secrets.TELEGRAM_CHAT_ID }}
         run: python bot.py
 
       # 8. Upload all account logs

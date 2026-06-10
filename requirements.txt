@@ -1,3 +1,4 @@
 playwright==1.44.0
 python-dotenv==1.0.1
 sendgrid==6.11.0
+python-telegram-bot==20.6
