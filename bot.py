@@ -895,7 +895,7 @@ def send_telegram_notification(all_summaries: list) -> None:
     try:
         import asyncio
         bot = Bot(token=token)
-        asyncio.run(bot.send_message(chat_id=chat_id, text=message, parse_mode="MarkdownV2"))
+        asyncio.run(bot.send_message(chat_id=chat_id, text=message))
         log.info("Telegram notification sent to chat %s", chat_id)
     except TelegramError as exc:
         log.warning("Failed to send Telegram notification: %s", exc)
