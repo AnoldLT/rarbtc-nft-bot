@@ -771,6 +771,9 @@ def send_run_notification(all_account_summaries: list) -> None:
         day_income = s.get("day_income", "N/A")
         income_color = "#27ae60" if day_income != "N/A" and not day_income.startswith("-") else "#e74c3c"
 
+        account_balance = s.get("account_balance", "N/A")
+        balance_display = f"{account_balance:.2f} USDT" if isinstance(account_balance, (int, float)) else account_balance
+
         failure_row = ""
         if s.get("failure_reason"):
             failure_row = f"""
@@ -806,6 +809,10 @@ def send_run_notification(all_account_summaries: list) -> None:
                 <tr style="background:#f8f9fa;">
                     <td style="padding:8px 12px; color:#666;"><strong>Day income</strong></td>
                     <td style="padding:8px 12px; font-weight:bold; color:{income_color};">{day_income}</td>
+                </tr>
+                <tr>
+                    <td style="padding:8px 12px; color:#666;"><strong>Account balance</strong></td>
+                    <td style="padding:8px 12px; font-weight:bold;">{balance_display}</td>
                 </tr>
                 {failure_row}
             </table>
@@ -882,6 +889,9 @@ def send_telegram_notification(all_summaries: list) -> None:
         income = s.get("day_income", "N/A")
         # colour is not needed in plain text; just show the value
         lines.append(f"  Day income:                 {income}")
+        balance = s.get("account_balance", "N/A")
+        balance_display = f"{balance:.2f} USDT" if isinstance(balance, (int, float)) else balance
+        lines.append(f"  Account balance:            {balance_display}")
         if s.get("failure_reason"):
             lines.append(f"  ⚠️ Issue: {s['failure_reason']}")
         lines.append("")  # separator between accounts
@@ -917,6 +927,7 @@ def run_account(account_num: int) -> dict:
         "reservations_end":   "N/A",
         "nfts_end":           "N/A",
         "day_income":         "N/A",
+        "account_balance":    "N/A",
     }
 
     # Load credentials for this account
@@ -1032,6 +1043,10 @@ def run_account(account_num: int) -> dict:
                 summary["day_income"] = bot.get_today_reservation_income()
                 acct_logger.info("Today's reservation income: %s", summary["day_income"])
 
+                # Read account balance (after day income, per request)
+                summary["account_balance"] = bot.get_account_balance()
+                acct_logger.info("Account balance: %s", summary["account_balance"])
+
             except Exception as e:
                 acct_logger.warning("Could not collect closing stats: %s", e)
 
@@ -1068,6 +1083,8 @@ def run_account(account_num: int) -> dict:
                     summary["nfts_end"] = bot._get_nft_total_number()
                 if summary["day_income"] == "N/A":
                     summary["day_income"] = bot.get_today_reservation_income()
+                if summary["account_balance"] == "N/A":
+                    summary["account_balance"] = bot.get_account_balance()
             except Exception:
                 pass
 
@@ -1114,6 +1131,7 @@ def run_account(account_num: int) -> dict:
                     f"  Reservations after run:         {summary.get('reservations_end', 'N/A')}",
                     f"  NFTs unsold after run:          {summary.get('nfts_end', 'N/A')}",
                     f"  Day income:                     {summary.get('day_income', 'N/A')}",
+                    f"  Account balance:                {summary.get('account_balance', 'N/A')}",
                 ]
                 if summary.get("failure_reason"):
                     lines.append("")
@@ -1151,8 +1169,8 @@ def main() -> None:
     log.info("All accounts processed. Summary:")
     for s in all_summaries:
         log.info(
-            "  Account %d: %s | Day income: %s",
-            s["account_num"], s["status"], s.get("day_income", "N/A")
+            "  Account %d: %s | Day income: %s | Balance: %s",
+            s["account_num"], s["status"], s.get("day_income", "N/A"), s.get("account_balance", "N/A")
         )
 
     # Send email notification after all accounts are done
